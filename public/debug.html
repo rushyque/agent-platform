@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent 调试控制台</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a21;
+    --panel-2: #1c212b;
+    --border: #2a313d;
+    --text: #e6e9ef;
+    --muted: #8b94a3;
+    --accent: #4f8cff;
+    --green: #3fb950;
+    --red: #f85149;
+    --purple: #a371f7;
+    --blue: #58a6ff;
+    --amber: #e3b341;
+    --gray: #b1bac4;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Top bar */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; white-space: nowrap; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  header .dot.ok { background: var(--green); }
+  header .dot.busy { background: var(--amber); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  header .spacer { flex: 1; }
+  header input.jwt {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 5px; width: 220px; font-family: var(--mono); font-size: 12px;
+  }
+  header input.jwt::placeholder { color: var(--muted); }
+  header button.icon {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 12px;
+  }
+  header button.icon:hover { border-color: var(--accent); }
+
+  /* Layout */
+  .main { flex: 1; display: grid; grid-template-columns: 280px 1fr 380px; min-height: 0; }
+  .col { min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+  .col.left, .col.right { background: var(--panel); border-right: 1px solid var(--border); }
+  .col.right { border-right: none; border-left: 1px solid var(--border); }
+  .col.center { background: var(--bg); }
+
+  .sec { border-bottom: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .sec h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+    margin: 0; padding: 8px 12px; font-weight: 600; flex: 0 0 auto;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .sec h2 button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 11px; }
+  .sec h2 button:hover { color: var(--accent); }
+  .sec .body { overflow: auto; padding: 4px 8px 8px; }
+
+  /* Left: agent & thread lists */
+  .item {
+    padding: 7px 9px; border-radius: 6px; cursor: pointer; margin-bottom: 2px;
+    border: 1px solid transparent;
+  }
+  .item:hover { background: var(--panel-2); }
+  .item.active { background: var(--panel-2); border-color: var(--accent); }
+  .item .t1 { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .item .t2 { font-size: 11px; color: var(--muted); margin-top: 2px; word-break: break-all; }
+  .tag { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+  .tag.dag { color: var(--purple); border-color: var(--purple); }
+
+  .audit { padding: 4px 12px 10px; }
+  .audit table { width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--mono); }
+  .audit th { text-align: left; color: var(--muted); font-weight: 500; padding: 3px 4px; border-bottom: 1px solid var(--border); }
+  .audit td { padding: 3px 4px; border-bottom: 1px solid var(--border); }
+  .audit .st { display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px; }
+  .st.success { color: var(--green); }
+  .st.error { color: var(--red); }
+  .empty { color: var(--muted); font-size: 12px; padding: 10px 4px; text-align: center; }
+
+  /* Center: compose */
+  .compose { padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--panel); flex: 0 0 auto; }
+  .compose textarea {
+    width: 100%; min-height: 54px; resize: vertical; background: var(--panel-2);
+    border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px; font: inherit;
+  }
+  .compose .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .compose .meta { font-size: 11px; color: var(--muted); font-family: var(--mono); flex: 1; word-break: break-all; }
+  .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit; font-size: 12px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .btn.danger { color: var(--red); border-color: var(--red); }
+  .btn.danger:hover { background: var(--red); color: #fff; }
+
+  /* Timeline */
+  .timeline { flex: 1; overflow: auto; padding: 10px 12px; }
+  .timeline-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 8px 14px 0; }
+
+  /* Examples / 设计点引导 */
+  .examples { border-bottom: 1px solid var(--border); background: var(--panel); flex: 0 0 auto; }
+  .ex-head { padding: 8px 12px; font-size: 12px; color: var(--text); cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+  .ex-head:hover { color: var(--accent); }
+  .ex-toggle { font-size: 11px; color: var(--muted); }
+  .ex-body { padding: 2px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .ex-body.collapsed { display: none; }
+  .ex-group { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; }
+  .ex-group .gname { color: var(--accent); min-width: 108px; font-weight: 600; flex: 0 0 108px; padding-top: 2px; }
+  .ex-chips { display: flex; flex-wrap: wrap; gap: 5px; flex: 1; }
+  .ex-chip { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 3px 9px; border-radius: 12px; cursor: pointer; font-size: 11px; }
+  .ex-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .ex-chip.dag { border-color: var(--purple); color: var(--purple); }
+  .ex-note { color: var(--muted); font-size: 11px; padding: 2px 0 0 108px; }
+
+  /* Trace 条 */
+  .trace { border-bottom: 1px solid var(--border); background: var(--panel-2); padding: 8px 12px; min-height: 34px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 0 auto; }
+  .trace-empty { color: var(--muted); font-size: 12px; }
+  .t-seg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; background: var(--panel); border: 1px solid var(--border); border-radius: 5px; padding: 3px 8px; }
+  .t-seg .k { color: var(--muted); }
+  .t-seg .v { color: var(--text); font-weight: 600; font-family: var(--mono); }
+  .t-seg.route-hermes .v { color: var(--blue); }
+  .t-seg.route-dag .v { color: var(--purple); }
+  .t-seg.tools .v { color: var(--green); }
+  .t-seg.calls .v { color: var(--amber); }
+  .t-arrow { color: var(--muted); font-size: 10px; }
+  .ev { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--muted);
+        border-radius: 6px; padding: 8px 10px; margin-bottom: 7px; cursor: pointer; transition: border-color .1s; }
+  .ev:hover { border-color: var(--accent); }
+  .ev.selected { outline: 1px solid var(--accent); }
+  .ev.cat-life.run_started { border-left-color: var(--green); }
+  .ev.cat-life.run_finished { border-left-color: var(--green); }
+  .ev.cat-life.run_error { border-left-color: var(--red); background: rgba(248,81,73,0.06); }
+  .ev.cat-step { border-left-color: var(--purple); }
+  .ev.cat-tool { border-left-color: var(--blue); }
+  .ev.cat-text { border-left-color: var(--gray); }
+  .ev.cat-reasoning { border-left-color: var(--amber); }
+  .ev.cat-other { border-left-color: var(--muted); }
+  .ev .hd { display: flex; align-items: center; gap: 8px; }
+  .chip { font-size: 10px; padding: 1px 6px; border-radius: 3px; font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+  .chip.run_started, .chip.run_finished { background: rgba(63,185,80,0.15); color: var(--green); }
+  .chip.run_error { background: rgba(248,81,73,0.15); color: var(--red); }
+  .chip.STEP_STARTED, .chip.STEP_FINISHED { background: rgba(163,113,247,0.15); color: var(--purple); }
+  .chip.tool { background: rgba(88,166,255,0.15); color: var(--blue); }
+  .chip.text { background: rgba(177,186,196,0.13); color: var(--gray); }
+  .chip.reasoning { background: rgba(227,179,65,0.15); color: var(--amber); }
+  .chip.other { background: var(--panel-2); color: var(--muted); }
+  .ev .ts { font-size: 10px; color: var(--muted); font-family: var(--mono); margin-left: auto; }
+  .ev .bd { margin-top: 6px; font-size: 12px; }
+  .ev .bd pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 11px; color: var(--text); }
+  .ev .bd .kv { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .ev .stream-text { white-space: pre-wrap; word-break: break-word; }
+  .ev details summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+  .ev details pre { margin-top: 6px; }
+  .pill { font-size: 10px; padding: 0 5px; border-radius: 8px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+  .pill.done { color: var(--green); border-color: var(--green); }
+  .pill.run { color: var(--amber); border-color: var(--amber); }
+
+  /* Right: detail */
+  .detail-body { padding: 10px 12px; overflow: auto; flex: 1; }
+  .detail-body h3 { font-size: 12px; margin: 0 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .detail-body pre.json { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 0; font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; }
+  .detail-body .field { margin-bottom: 10px; }
+  .detail-body .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .hint { color: var(--muted); font-size: 12px; padding: 14px; }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2a313d; border-radius: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="status-dot"></span>
+  <h1>Agent 调试控制台</h1>
+  <span style="font-size:11px;color:var(--muted);font-family:var(--mono)" id="runtime-info">连接中…</span>
+  <span class="spacer"></span>
+  <input class="jwt" id="jwt" placeholder="可选 JWT (Bearer token)" autocomplete="off" />
+  <button class="icon" id="btn-refresh" title="刷新线程/审计">刷新</button>
+</header>
+
+<div class="main">
+  <!-- LEFT -->
+  <div class="col left">
+    <div class="sec" style="flex:0 0 auto">
+      <h2>Agent</h2>
+      <div class="body" id="agent-list"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="sec" style="flex:1 1 40%">
+      <h2>线程 <button id="btn-new-thread">＋ 新建</button></h2>
+      <div class="body" id="thread-list"><div class="empty">无</div></div>
+    </div>
+    <div class="sec" style="flex:1 1 35%">
+      <h2>审计（最近 run）</h2>
+      <div class="audit" id="audit"><div class="empty">—</div></div>
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div class="col center">
+    <div class="compose">
+      <textarea id="msg" placeholder="输入消息，回车发送（Shift+回车换行）…"></textarea>
+      <div class="row">
+        <span class="meta" id="compose-meta">未选择线程</span>
+        <button class="btn danger" id="btn-stop" disabled>停止</button>
+        <button class="btn primary" id="btn-send">发送</button>
+      </div>
+    </div>
+    <!-- 设计点 & 示例引导：点击即发送，触发各 agent 机制 -->
+    <div class="examples" id="examples">
+      <div class="ex-head" id="ex-head">💡 这个平台的 5 个设计点（点击示例直接体验）<span class="ex-toggle">收起</span></div>
+      <div class="ex-body" id="ex-body"></div>
+    </div>
+    <!-- 执行轨迹条：把"开始→回答→结束"变成 agent 叙述 -->
+    <div class="trace" id="trace"><span class="trace-empty">发送消息后，这里会显示 agent 的决策与动作轨迹。</span></div>
+    <div class="timeline-label">事件流（详细）</div>
+    <div class="timeline" id="timeline">
+      <div class="empty" style="padding:30px">选择线程回放历史，或直接发送消息触发一次 run。<br>所有 AG-UI 事件将按发生顺序显示在此。</div>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="col right">
+    <div class="sec" style="flex:1">
+      <h2>详情检查器</h2>
+      <div class="detail-body" id="detail"><div class="hint">点击左侧时间线任意事件，查看完整 payload。<br>工具调用会显示 args / result；文本/推理显示拼装后的内容。</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const API = ""; // 同源
+const state = {
+  agents: [],
+  currentAgent: null,
+  threads: [],
+  currentThreadId: null,
+  busy: false,
+  // 聚合视图（按 thread + 本次会话累积）
+  toolCalls: new Map(),   // toolCallId -> { name, args, result, started, ended, raw:[] }
+  textMsgs: new Map(),    // messageId -> { text, raw:[] }
+  reasoning: new Map(),   // id -> { text, raw:[] }
+  steps: new Map(),       // stepId -> { started, finished, raw:[] }
+  selectedKey: null,
+  currentRunId: null,     // 当前 run 的 id（用于拉 meta）
+  meta: null,             // /debug/api/runs/:runId/meta 的结果
+};
+
+// ---------- 设计点示例（点击即发送，触发各 agent 机制）----------
+const EXAMPLES = [
+  { group: "意图分类→工具子集", items: [
+      { p: "查一下最近的订单", hint: "intent=order → 选中 order 工具子集" },
+      { p: "张三客户的信息", hint: "intent=customer" },
+      { p: "本月销售概览", hint: "intent=sales_overview" },
+  ]},
+  { group: "Hermes 多步工具循环", items: [
+      { p: "对比本月订单和汇款情况", hint: "模型可能连续调用多个工具" },
+  ]},
+  { group: "DAG 确定性编排", dag: true, items: [
+      { p: "生成本月销售报告", hint: "4 步编排 + 工具调用（自动切到 saleshub_report）" },
+  ]},
+];
+
+// ---------- 工具 ----------
+const $ = (id) => document.getElementById(id);
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Math.random().toString(36).slice(2) + Date.now().toString(36));
+function authHeaders() {
+  const t = $("jwt").value.trim();
+  const h = { "Content-Type": "application/json" };
+  if (t) h["Authorization"] = "Bearer " + t;
+  return h;
+}
+async function getJson(p) {
+  const r = await fetch(API + p, { headers: authHeaders() });
+  if (!r.ok) throw new Error(`${p} → ${r.status}`);
+  return r.json();
+}
+function fmtTime(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  return dt.toLocaleTimeString("zh-CN", { hour12: false }) + "." + String(dt.getMilliseconds()).padStart(3, "0");
+}
+function setStatus(busy) {
+  state.busy = busy;
+  const dot = $("status-dot");
+  dot.className = "dot " + (busy ? "busy" : "ok");
+  $("btn-send").disabled = busy;
+  $("btn-stop").disabled = !busy;
+}
+function category(type) {
+  if (type === "RUN_STARTED" || type === "RUN_FINISHED") return { c: "life", cls: "cat-life " + type.toLowerCase() };
+  if (type === "RUN_ERROR") return { c: "life", cls: "cat-life run_error" };
+  if (type.startsWith("STEP_")) return { c: "step", cls: "cat-step" };
+  if (type.startsWith("TOOL_CALL")) return { c: "tool", cls: "cat-tool" };
+  if (type.startsWith("TEXT_MESSAGE")) return { c: "text", cls: "cat-text" };
+  if (type.startsWith("REASONING") || type.startsWith("THINKING")) return { c: "reasoning", cls: "cat-reasoning" };
+  return { c: "other", cls: "cat-other" };
+}
+
+// ---------- 加载：agents / threads / info ----------
+async function loadAgents() {
+  try {
+    const { agents } = await getJson("/debug/api/agents");
+    state.agents = agents;
+    if (!state.currentAgent && agents.length) state.currentAgent = agents[0].id;
+    renderAgents();
+    updateComposeMeta();
+  } catch (e) {
+    $("agent-list").innerHTML = `<div class="empty">加载失败</div>`;
+  }
+}
+function renderAgents() {
+  const box = $("agent-list");
+  if (!state.agents.length) { box.innerHTML = `<div class="empty">无已注册 agent</div>`; return; }
+  box.innerHTML = state.agents.map(a => `
+    <div class="item ${a.id === state.currentAgent ? "active" : ""}" data-agent="${a.id}">
+      <div class="t1">${a.id} ${a.hasDag ? '<span class="tag dag">DAG</span>' : '<span class="tag">Hermes</span>'}</div>
+      <div class="t2">${a.description || ""}</div>
+    </div>`).join("");
+  box.querySelectorAll("[data-agent]").forEach(el => {
+    el.onclick = () => { state.currentAgent = el.dataset.agent; renderAgents(); };
+  });
+}
+
+async function loadThreads() {
+  try {
+    const { threads } = await getJson("/debug/api/threads");
+    state.threads = threads || [];
+    renderThreads();
+  } catch (e) {
+    $("thread-list").innerHTML = `<div class="empty">读取失败</div>`;
+  }
+}
+function renderThreads() {
+  const box = $("thread-list");
+  if (!state.threads.length) { box.innerHTML = `<div class="empty">无</div>`; return; }
+  box.innerHTML = state.threads.map(t => `
+    <div class="item ${t.id === state.currentThreadId ? "active" : ""}" data-thread="${t.id}">
+      <div class="t1">${t.id.slice(0, 8)}… <span class="tag">${(t.agentId || "?").slice(0,12)}</span></div>
+      <div class="t2">${fmtTime(t.updatedAt || t.createdAt)}</div>
+    </div>`).join("");
+  box.querySelectorAll("[data-thread]").forEach(el => {
+    el.onclick = () => selectThread(el.dataset.thread);
+  });
+}
+async function selectThread(id) {
+  state.currentThreadId = id;
+  state.selectedKey = null;
+  state.currentRunId = null;
+  state.meta = null;
+  resetAggregates();
+  $("timeline").innerHTML = "";
+  $("detail").innerHTML = `<div class="hint">加载历史事件…</div>`;
+  renderTrace();
+  renderThreads();
+  updateComposeMeta();
+  await loadAudit();
+  try {
+    const data = await getJson(`/debug/api/threads/${encodeURIComponent(id)}/events`);
+    const events = data.events || [];
+    events.forEach(ev => handleEvent(ev, true));
+    if (!events.length) $("timeline").innerHTML = `<div class="empty" style="padding:30px">该线程无事件。</div>`;
+  } catch (e) {
+    $("timeline").innerHTML = `<div class="empty">加载失败: ${e.message}</div>`;
+  }
+}
+
+async function loadAudit() {
+  const box = $("audit");
+  const tid = state.currentThreadId;
+  if (!tid) { box.innerHTML = `<div class="empty">—</div>`; return; }
+  try {
+    const { runs } = await getJson(`/debug/api/runs?threadId=${encodeURIComponent(tid)}&limit=20`);
+    if (!runs.length) { box.innerHTML = `<div class="empty">无</div>`; return; }
+    box.innerHTML = `
+      <table>
+        <tr><th>状态</th><th>步</th><th>token(p/c)</th><th>时间</th></tr>
+        ${runs.map(r => `<tr>
+          <td><span class="st ${r.status}">${r.status}</span></td>
+          <td>${r.steps}</td>
+          <td>${r.promptTokens ?? "-"}/${r.completionTokens ?? "-"}</td>
+          <td>${fmtTime(r.createdAt)}</td>
+        </tr>`).join("")}
+      </table>`;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">审计不可用</div>`;
+  }
+}
+
+async function loadRuntimeInfo() {
+  try {
+    const info = await getJson("/info");
+    $("runtime-info").textContent = `v${info.version || "?"} · 模式 ${info.mode || "?"}`;
+    $("status-dot").className = "dot ok";
+  } catch {
+    $("runtime-info").textContent = "runtime 未就绪";
+  }
+}
+
+// ---------- 时间线渲染 ----------
+function resetAggregates() {
+  state.toolCalls.clear(); state.textMsgs.clear(); state.reasoning.clear(); state.steps.clear();
+}
+function chipClass(type) {
+  const { c } = category(type);
+  if (type.startsWith("TOOL_CALL")) return "tool";
+  if (type.startsWith("TEXT_MESSAGE")) return "text";
+  if (type.startsWith("REASONING") || type.startsWith("THINKING")) return "reasoning";
+  if (type.startsWith("STEP_")) return type;
+  if (type === "RUN_STARTED" || type === "RUN_FINISHED" || type === "RUN_ERROR") return type.toLowerCase();
+  return "other";
+}
+
+// 为每个聚合块创建容器；首次出现时插入时间线，之后原地更新。
+function ensureBlock(key, html) {
+  let el = document.getElementById("ev-" + key);
+  if (!el) {
+    const div = document.createElement("div");
+    div.className = "ev";
+    div.id = "ev-" + key;
+    div.dataset.key = key;
+    div.innerHTML = html;
+    div.onclick = () => selectDetail(key);
+    $("timeline").appendChild(div);
+    return div;
+  }
+  el.innerHTML = html;
+  return el;
+}
+
+function handleEvent(ev, isReplay) {
+  const type = ev.type;
+  const ts = fmtTime(new Date());
+  const cat = category(type);
+
+  // —— 工具调用聚合 ——
+  if (type.startsWith("TOOL_CALL")) {
+    const id = ev.toolCallId || "tool-unknown";
+    let agg = state.toolCalls.get(id);
+    if (!agg) { agg = { name: "", args: "", result: null, started: false, ended: false, raw: [] }; state.toolCalls.set(id, agg); }
+    agg.raw.push(ev);
+    if (type === "TOOL_CALL_START") { agg.started = true; agg.name = ev.toolCallName || agg.name; }
+    else if (type === "TOOL_CALL_ARGS") agg.args += ev.delta || "";
+    else if (type === "TOOL_CALL_END") agg.ended = true;
+    else if (type === "TOOL_CALL_RESULT") agg.result = ev.content ?? null;
+    renderToolBlock(id, agg, ts);
+    if (!isReplay) bindSelectedRefresh(id);
+    return;
+  }
+
+  // —— 文本消息拼装 ——
+  if (type.startsWith("TEXT_MESSAGE")) {
+    const id = ev.messageId || "msg-unknown";
+    let agg = state.textMsgs.get(id);
+    if (!agg) { agg = { text: "", ended: false, raw: [] }; state.textMsgs.set(id, agg); }
+    agg.raw.push(ev);
+    if (type === "TEXT_MESSAGE_CONTENT") agg.text += ev.delta || "";
+    if (type === "TEXT_MESSAGE_END") agg.ended = true;
+    renderTextBlock(id, agg, ts);
+    if (!isReplay) bindSelectedRefresh(id);
+    return;
+  }
+
+  // —— reasoning 拼装 ——
+  if (type.startsWith("REASONING") || type.startsWith("THINKING")) {
+    const id = ev.id || ev.messageId || "reason-unknown";
+    let agg = state.reasoning.get(id);
+    if (!agg) { agg = { text: "", raw: [] }; state.reasoning.set(id, agg); }
+    agg.raw.push(ev);
+    if (type.endsWith("_CONTENT") || type.includes("CHUNK")) agg.text += ev.delta || "";
+    renderReasoningBlock(id, agg, ts);
+    if (!isReplay) bindSelectedRefresh(id);
+    return;
+  }
+
+  // —— DAG 步骤 ——
+  if (type.startsWith("STEP_")) {
+    const id = ev.stepId || "step-unknown";
+    let agg = state.steps.get(id);
+    if (!agg) { agg = { started: false, finished: false, raw: [] }; state.steps.set(id, agg); }
+    agg.raw.push(ev);
+    if (type === "STEP_STARTED") agg.started = true;
+    if (type === "STEP_FINISHED") agg.finished = true;
+    renderStepBlock(id, agg, ts);
+    if (!isReplay) bindSelectedRefresh(id);
+    return;
+  }
+
+  // —— 生命周期 / 其他：独立块 ——
+  const key = "solo-" + uuid();
+  const { cls } = cat;
+  const summary = lifeSummary(ev);
+  const el = ensureBlock(key, `
+    <div class="hd">
+      <span class="chip ${chipClass(type)}">${type}</span>
+      ${summary ? `<span class="kv">${summary}</span>` : ""}
+      <span class="ts">${ts}</span>
+    </div>
+    <div class="bd"><details><summary>payload</summary><pre>${esc(JSON.stringify(ev, null, 2))}</pre></details></div>
+  `);
+  if (cls) el.className = "ev " + cls;
+  if (!isReplay) bindSelectedRefresh(key);
+}
+
+function lifeSummary(ev) {
+  if (ev.type === "RUN_STARTED") return `agent=${ev.agent?.name || ev.agentId || "?"}  run=${(ev.runId||"").slice(0,8)}`;
+  if (ev.type === "RUN_FINISHED") return `run=${(ev.runId||"").slice(0,8)}`;
+  if (ev.type === "RUN_ERROR") return `${ev.message || ev.error || ""}`;
+  if (ev.type === "STATE_SNAPSHOT") return "(state snapshot)";
+  return "";
+}
+
+function renderToolBlock(id, agg, ts) {
+  let resultDisp = "";
+  if (agg.result != null) {
+    const isErr = typeof agg.result === "string" && /error|fail|exception/i.test(agg.result);
+    resultDisp = `<details open><summary style="color:${isErr ? "var(--red)" : "var(--blue)"}">result ${isErr ? "(疑似错误)" : ""}</summary><pre>${esc(pretty(agg.result))}</pre></details>`;
+  }
+  const el = ensureBlock(id, `
+    <div class="hd">
+      <span class="chip tool">TOOL</span>
+      <span class="kv">🔧 ${esc(agg.name || "?")}</span>
+      <span class="pill ${agg.ended ? "done" : "run"}">${agg.ended ? "done" : "running"}</span>
+      <span class="ts">${ts}</span>
+    </div>
+    <div class="bd">
+      <div class="kv">args:</div>
+      <pre>${esc(pretty(agg.args))}</pre>
+      ${resultDisp}
+    </div>`);
+  el.classList.add("cat-tool");
+}
+function renderTextBlock(id, agg, ts) {
+  const empty = !agg.text;
+  const body = empty
+    ? `<div class="stream-text" style="color:var(--amber)">⚠ 未收到文本 delta${agg.ended ? "（流已结束）" : ""}。若服务端审计有 textLen 但前端为空，说明 AG-UI 转换异常。</div>`
+    : `<div class="stream-text">${esc(agg.text)}</div>`;
+  const el = ensureBlock(id, `
+    <div class="hd">
+      <span class="chip text">TEXT</span>
+      <span class="kv">💬 assistant</span>
+      <span class="ts">${ts}</span>
+    </div>
+    <div class="bd">${body}</div>`);
+  el.classList.add("cat-text");
+}
+function renderReasoningBlock(id, agg, ts) {
+  const el = ensureBlock(id, `
+    <div class="hd">
+      <span class="chip reasoning">REASONING</span>
+      <span class="kv">🧠 thinking</span>
+      <span class="ts">${ts}</span>
+    </div>
+    <div class="bd"><details><summary>展开 (${agg.text.length} 字符)</summary><div class="stream-text">${esc(agg.text)}</div></details></div>`);
+  el.classList.add("cat-reasoning");
+}
+function renderStepBlock(id, agg, ts) {
+  const chip = agg.finished ? "STEP_FINISHED" : "STEP_STARTED";
+  const el = ensureBlock(id, `
+    <div class="hd">
+      <span class="chip ${chip}">STEP</span>
+      <span class="kv">📌 ${esc(id)}</span>
+      <span class="pill ${agg.finished ? "done" : "run"}">${agg.finished ? "done" : "running"}</span>
+      <span class="ts">${ts}</span>
+    </div>`);
+  el.classList.add("cat-step");
+}
+
+// 保持选中态高亮 + 滚动到底；同时刷新 Trace 条（工具调用计数实时更新）
+function bindSelectedRefresh(key) {
+  if (state.selectedKey === key) selectDetail(key);
+  const tl = $("timeline");
+  tl.scrollTop = tl.scrollHeight;
+  renderTrace();
+}
+
+// ---------- 详情面板 ----------
+function pretty(v) {
+  if (v == null) return "";
+  if (typeof v === "string") {
+    try { return JSON.stringify(JSON.parse(v), null, 2); } catch { return v; }
+  }
+  return JSON.stringify(v, null, 2);
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+function selectDetail(key) {
+  state.selectedKey = key;
+  document.querySelectorAll(".ev").forEach(el => el.classList.toggle("selected", el.dataset.key === key));
+  const d = $("detail");
+  // 工具
+  if (state.toolCalls.has(key)) {
+    const a = state.toolCalls.get(key);
+    d.innerHTML = `
+      <h3>工具调用 · ${esc(a.name || "?")}</h3>
+      <div class="field"><label>toolCallId</label><pre class="json">${esc(key)}</pre></div>
+      <div class="field"><label>args</label><pre class="json">${esc(pretty(a.args))}</pre></div>
+      <div class="field"><label>result</label><pre class="json">${esc(pretty(a.result))}</pre></div>
+      <h3>原始事件 (${a.raw.length})</h3>
+      <pre class="json">${esc(a.raw.map(e => JSON.stringify(e)).join("\n"))}</pre>`;
+    return;
+  }
+  if (state.textMsgs.has(key)) {
+    const a = state.textMsgs.get(key);
+    d.innerHTML = `
+      <h3>助手文本</h3>
+      <div class="field"><label>messageId</label><pre class="json">${esc(key)}</pre></div>
+      <div class="field"><label>拼装内容</label><pre class="json">${esc(a.text)}</pre></div>
+      <h3>原始事件 (${a.raw.length})</h3>
+      <pre class="json">${esc(a.raw.map(e => JSON.stringify(e)).join("\n"))}</pre>`;
+    return;
+  }
+  if (state.reasoning.has(key)) {
+    const a = state.reasoning.get(key);
+    d.innerHTML = `
+      <h3>推理内容 (reasoning)</h3>
+      <div class="field"><label>id</label><pre class="json">${esc(key)}</pre></div>
+      <div class="field"><label>拼装内容</label><pre class="json">${esc(a.text)}</pre></div>`;
+    return;
+  }
+  if (state.steps.has(key)) {
+    const a = state.steps.get(key);
+    d.innerHTML = `
+      <h3>DAG 步骤 · ${esc(key)}</h3>
+      <div class="field"><label>状态</label><pre class="json">${a.finished ? "finished" : a.started ? "started" : "pending"}</pre></div>
+      <h3>原始事件 (${a.raw.length})</h3>
+      <pre class="json">${esc(a.raw.map(e => JSON.stringify(e)).join("\n"))}</pre>`;
+    return;
+  }
+  // solo 块
+  const el = document.getElementById("ev-" + key);
+  if (el) {
+    const json = el.querySelector("pre");
+    const type = el.querySelector(".chip")?.textContent || "";
+    d.innerHTML = `<h3>${esc(type)}</h3><div class="field"><label>payload</label><pre class="json">${json ? esc(json.textContent) : ""}</pre></div>`;
+  }
+}
+
+function updateComposeMeta() {
+  const a = state.currentAgent || "?";
+  const t = state.currentThreadId ? state.currentThreadId.slice(0, 8) + "…" : "(新线程)";
+  $("compose-meta").textContent = `agent=${a} · thread=${t}`;
+}
+
+// ---------- 设计点示例 & 执行轨迹 ----------
+function renderExamples() {
+  const body = $("ex-body");
+  body.innerHTML = EXAMPLES.map(g => `
+    <div class="ex-group">
+      <div class="gname">${esc(g.group)}</div>
+      <div class="ex-chips">
+        ${g.items.map(it => `<span class="ex-chip ${g.dag ? "dag" : ""}" data-p="${esc(it.p)}" data-dag="${g.dag ? "1" : ""}" title="${esc(it.hint || "")}">${esc(it.p)}</span>`).join("")}
+      </div>
+    </div>`).join("") + `
+    <div class="ex-note">持久化回放：刷新页面 → 左侧点历史线程 → 看完整事件轨迹。</div>`;
+  body.querySelectorAll(".ex-chip").forEach(el => {
+    el.onclick = () => {
+      const isDag = el.dataset.dag === "1";
+      if (isDag) {
+        const dagAgent = state.agents.find(a => a.hasDag);
+        if (dagAgent) { state.currentAgent = dagAgent.id; renderAgents(); updateComposeMeta(); }
+      }
+      $("msg").value = el.dataset.p;
+      sendMessage();
+    };
+  });
+}
+$("ex-head").onclick = () => {
+  const b = $("ex-body"); const t = document.querySelector(".ex-toggle");
+  b.classList.toggle("collapsed");
+  t.textContent = b.classList.contains("collapsed") ? "展开" : "收起";
+};
+
+// meta 到达或工具调用变化时刷新 Trace 条
+function renderTrace() {
+  const box = $("trace");
+  const m = state.meta;
+  if (!m) {
+    box.innerHTML = state.currentRunId
+      ? `<span class="trace-empty">run ${state.currentRunId.slice(0,8)}… 运行中…</span>`
+      : `<span class="trace-empty">发送消息后，这里会显示 agent 的决策与动作轨迹。</span>`;
+    return;
+  }
+  const routeName = m.route === "dag" ? "DAG 确定性编排" : "Hermes 自主循环";
+  // 工具调用统计来自本次事件流聚合
+  const calls = Array.from(state.toolCalls.values()).filter(t => t.name);
+  const callNames = calls.map(t => t.name.replace(/^saleshub_/, ""));
+  const toolSubsets = m.selectedTools.map(t => t.replace(/^saleshub_/, ""));
+  const seg = (cls, k, v) => `<span class="t-seg ${cls}"><span class="k">${k}</span><span class="v">${v}</span></span>`;
+  const arrow = `<span class="t-arrow">▶</span>`;
+  box.innerHTML =
+    seg(`route-${m.route}`, "路由", routeName) + arrow +
+    seg("", "意图", m.intent) + arrow +
+    seg("tools", "工具集", `${m.selectedTools.length}/${m.totalTools}` + (toolSubsets.length ? ` (${esc(toolSubsets.join(", "))})` : "")) +
+    (calls.length ? arrow + seg("calls", "工具调用", `${calls.length} 次 (${esc(callNames.join(", "))})`) : "") +
+    arrow + seg("", "角色", m.role) +
+    `<span class="t-seg" style="margin-left:auto"><span class="k">模型</span><span class="v">${esc(m.model)}</span></span>`;
+}
+
+// 拉 run meta（工厂写入可能有延迟，重试几次）
+async function fetchRunMeta(runId) {
+  for (let i = 0; i < 8; i++) {
+    try {
+      const { meta } = await getJson(`/debug/api/runs/${encodeURIComponent(runId)}/meta`);
+      if (meta) { state.meta = meta; renderTrace(); return; }
+    } catch { /* ignore */ }
+    await new Promise(r => setTimeout(r, 250));
+  }
+  renderTrace(); // 重试耗尽，渲染"运行中"
+}
+
+// ---------- 触发 run（SSE） ----------
+async function sendMessage() {
+  const content = $("msg").value.trim();
+  if (!content) return;
+  if (!state.currentAgent) { alert("请先在左栏选择一个 agent"); return; }
+  const agentId = state.currentAgent;
+  const threadId = state.currentThreadId || uuid();
+  state.currentThreadId = threadId;
+
+  // 取历史消息，拼上本次 user 消息
+  let history = [];
+  try {
+    const data = await getJson(`/debug/api/threads/${encodeURIComponent(threadId)}/messages`);
+    history = data.messages || [];
+  } catch { /* 新线程可能无 */ }
+  const messages = history.concat([{ id: uuid(), role: "user", content }]);
+  const runId = uuid();
+  const body = { threadId, runId, state: {}, messages, tools: [], context: [] };
+
+  $("msg").value = "";
+  resetAggregates();
+  $("timeline").innerHTML = "";
+  state.selectedKey = null;
+  state.currentRunId = runId;
+  state.meta = null;
+  renderTrace();
+  updateComposeMeta();
+  setStatus(true);
+  fetchRunMeta(runId); // 异步拉取平台决策
+
+  let abortCtrl = state._abort = new AbortController();
+  try {
+    const resp = await fetch(API + `/agent/${encodeURIComponent(agentId)}/run`, {
+      method: "POST", headers: authHeaders(), body: JSON.stringify(body), signal: abortCtrl.signal,
+    });
+    if (!resp.ok || !resp.body) {
+      const txt = await resp.text().catch(() => "");
+      appendError(`run 请求失败 ${resp.status} ${txt}`);
+      return;
+    }
+    await streamSSE(resp.body, (ev) => handleEvent(ev, false));
+    renderThreads(); loadAudit(); // 完成后刷新侧栏
+  } catch (e) {
+    if (e.name === "AbortError") appendError("（已停止）");
+    else appendError("流读取错误: " + e.message);
+  } finally {
+    setStatus(false);
+    state._abort = null;
+  }
+}
+
+async function streamSSE(body, onEvent) {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    // SSE 事件以空行分隔
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const chunk = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      parseSSEBlock(chunk, onEvent);
+    }
+  }
+  if (buf.trim()) parseSSEBlock(buf, onEvent);
+}
+function parseSSEBlock(block, onEvent) {
+  // 收集 data: 行（可能多行），拼成一条
+  const dataLines = [];
+  for (const line of block.split("\n")) {
+    if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    // 忽略 event:/id:/注释行；AG-UI 主要用 data:
+  }
+  if (!dataLines.length) return;
+  const payload = dataLines.join("\n");
+  if (payload === "[DONE]") return;
+  try { onEvent(JSON.parse(payload)); }
+  catch { /* 非 JSON（心跳等），忽略 */ }
+}
+
+function appendError(msg) {
+  const key = "solo-" + uuid();
+  ensureBlock(key, `
+    <div class="hd">
+      <span class="chip run_error">CLIENT</span>
+      <span class="kv">${esc(msg)}</span>
+      <span class="ts">${fmtTime(new Date())}</span>
+    </div>`);
+}
+
+async function stopRun() {
+  if (!state.currentThreadId || !state.currentAgent) return;
+  try {
+    await fetch(API + `/agent/${encodeURIComponent(state.currentAgent)}/stop/${encodeURIComponent(state.currentThreadId)}`, {
+      method: "POST", headers: authHeaders(),
+    });
+  } catch (e) { appendError("停止请求失败: " + e.message); }
+  if (state._abort) state._abort.abort();
+}
+
+// ---------- 事件绑定 ----------
+$("btn-send").onclick = sendMessage;
+$("btn-stop").onclick = stopRun;
+$("btn-refresh").onclick = () => { loadThreads(); loadAudit(); };
+$("btn-new-thread").onclick = () => {
+  state.currentThreadId = null; state.selectedKey = null;
+  state.currentRunId = null; state.meta = null;
+  resetAggregates();
+  $("timeline").innerHTML = `<div class="empty" style="padding:30px">已新建会话。输入消息后将自动分配线程。</div>`;
+  $("detail").innerHTML = `<div class="hint">点击事件查看详情。</div>`;
+  renderTrace(); renderThreads(); updateComposeMeta(); loadAudit();
+};
+$("msg").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+// 初始加载
+renderExamples();
+loadRuntimeInfo();
+loadAgents();
+loadThreads();
+updateComposeMeta();
+renderTrace();
+$("status-dot").className = "dot ok";
+</script>
+</body>
+</html>

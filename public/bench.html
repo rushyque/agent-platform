@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>并发性能压测 · 本地模型</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --panel-2: #1c212b; --border: #2a313d;
+    --text: #e6e9ef; --muted: #8b94a3; --accent: #4f8cff; --green: #3fb950;
+    --red: #f85149; --purple: #a371f7; --blue: #58a6ff; --amber: #e3b341;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    display: flex; flex-direction: column; overflow: auto;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+    flex: 0 0 auto;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  header .dot.busy { background: var(--amber); animation: pulse 1s infinite; }
+  header .dot.ok { background: var(--green); }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  header .spacer { flex: 1; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header button {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 5px 12px; border-radius: 5px; cursor: pointer; font-size: 12px;
+  }
+  header button:hover { border-color: var(--accent); }
+  header button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  header button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  header button.danger { background: var(--red); border-color: var(--red); color: #fff; }
+
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 14px; width: 100%; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 14px;
+  }
+  .card h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+    margin: 0 0 10px; font-weight: 600;
+  }
+  .grid-config { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--muted); }
+  .field input, .field textarea, .field select {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 8px; border-radius: 5px; font-family: inherit; font-size: 12px;
+  }
+  .field textarea { min-height: 64px; resize: vertical; }
+  .field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+  .seg button {
+    background: var(--panel-2); border: none; color: var(--muted);
+    padding: 6px 10px; cursor: pointer; font-size: 12px;
+  }
+  .seg button.active { background: var(--accent); color: #fff; }
+  .quickrow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .quickrow button {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; font-family: var(--mono);
+  }
+  .quickrow button.active { border-color: var(--accent); color: var(--accent); }
+  .hidden { display: none !important; }
+
+  /* slots */
+  #slots { display: flex; flex-direction: column; gap: 6px; }
+  .slot {
+    display: grid; grid-template-columns: 90px 18px 1fr 80px 80px 70px;
+    gap: 10px; align-items: center; padding: 6px 8px;
+    background: var(--panel-2); border-radius: 5px; border: 1px solid var(--border);
+  }
+  .slot .id { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .slot .led { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .slot .led.wait { background: var(--muted); }
+  .slot .led.ttft { background: var(--amber); animation: pulse 1s infinite; }
+  .slot .led.stream { background: var(--blue); animation: pulse 1s infinite; }
+  .slot .led.done { background: var(--green); }
+  .slot .led.fail { background: var(--red); }
+  .slot .bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; position: relative; }
+  .slot .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.15s; }
+  .slot .num { font-family: var(--mono); font-size: 11px; text-align: right; }
+
+  /* tables */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; }
+  td.m { font-family: var(--mono); }
+  tr.fail td { color: var(--red); }
+
+  /* summary cards */
+  .levels { display: flex; gap: 10px; flex-wrap: wrap; }
+  .lvl {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; min-width: 150px;
+  }
+  .lvl .h { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .lvl .big { font-size: 20px; font-weight: 600; font-family: var(--mono); }
+  .lvl .row { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .lvl .row b { color: var(--text); font-family: var(--mono); font-weight: 500; }
+
+  .charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .chart { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  .chart h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); font-weight: 600; }
+  svg { display: block; width: 100%; }
+
+  .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
+  a.btn { text-decoration: none; }
+  .note { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  button.preset {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--accent);
+    padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; margin-left: 4px;
+  }
+  button.preset:hover { border-color: var(--accent); }
+  .presets { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .presets .muted { color: var(--muted); font-size: 11px; }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+    background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid var(--red);
+    text-transform: none; letter-spacing: 0; margin-left: 8px;
+  }
+  .badge.ok { background: rgba(63,185,80,0.12); color: var(--green); border-color: var(--green); }
+  #rate-chart { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; min-height: 0; }
+  #rate-chart:empty { display: none; }
+  #detail-table tbody tr { cursor: pointer; }
+  #detail-table tbody tr:hover { background: var(--panel-2); }
+  #detail-table tbody tr.sel { background: rgba(79,140,255,0.12); }
+  .spark { width: 90px; height: 22px; display: inline-block; vertical-align: middle; }
+  .hit-cell { color: var(--red); font-weight: 600; }
+  .hit-cell.none { color: var(--muted); font-weight: 400; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="led"></span>
+  <h1>本地模型并发性能压测</h1>
+  <span class="sub" id="status">就绪</span>
+  <span class="spacer"></span>
+  <button id="btn-json" disabled>导出 JSON</button>
+  <button id="btn-md" disabled>导出 Markdown 报告</button>
+  <button id="btn-run" class="primary">开始</button>
+  <button id="btn-stop" class="danger hidden">停止</button>
+</header>
+
+<div class="wrap">
+  <!-- 配置 -->
+  <div class="card">
+    <h2>测试配置</h2>
+    <div class="grid-config">
+      <div class="field" style="grid-column: 1 / -1;">
+        <label>测试链路（决定数据含义）</label>
+        <div class="seg" id="mode-seg">
+          <button data-mode="raw" class="active">纯模型直连（绕过中台）</button>
+          <button data-mode="e2e">端到端经中台（/agent/run）</button>
+        </div>
+      </div>
+      <div class="field" style="grid-column: 1 / -1;">
+        <label for="prompt">提示词（每次请求都发这段）</label>
+        <div class="presets">
+          <span class="muted">预设：</span>
+          <button type="button" class="preset" data-preset="long">长回复·5000字散文（抓中途卡顿）</button>
+          <button type="button" class="preset" data-preset="short">短回复·300字</button>
+          <span class="muted" style="margin-left:auto">目标字数（进度条分母）：</span>
+          <input id="target-chars" type="number" min="1" value="5000" style="width:84px" />
+        </div>
+        <textarea id="prompt">请写一篇题为《故乡的河》的中文散文，不少于 5000 字。要求：从童年记忆、河流的地理变迁、两岸人事更迭、对故乡的情感寄托四个方面依次展开，每个方面都要详尽细腻、细节丰富、语言优美。必须写满 5000 字以上，不得提前收尾或敷衍。</textarea>
+      </div>
+      <div class="field">
+        <label>并发数（每轮同时发起的请求数）</label>
+        <div class="quickrow">
+          <button data-c="1">1</button>
+          <button data-c="2" class="active">2</button>
+          <button data-c="4">4</button>
+          <button data-c="8">8</button>
+          <button data-c="16">16</button>
+          <input id="conc" type="number" min="1" max="64" value="2" style="width:64px;" />
+        </div>
+      </div>
+      <div class="field">
+        <label>轮数（偶发卡顿建议多跑，长回复每轮约 1 分钟）</label>
+        <input id="rounds" type="number" min="1" max="100" value="5" />
+      </div>
+      <div class="field raw-only">
+        <label>模型 override（可选，默认服务端 DEEPSEEK_MODEL）</label>
+        <input id="model" placeholder="deepseek-chat" />
+      </div>
+      <div class="field e2e-only hidden">
+        <label>agentId（如 starlink-factory）</label>
+        <input id="agentId" placeholder="starlink-factory" />
+      </div>
+      <div class="field e2e-only hidden" style="grid-column: 1 / -1;">
+        <label>JWT（中台鉴权用，可留空）</label>
+        <input id="jwt" placeholder="Bearer 可省略，仅填 token" />
+      </div>
+    </div>
+    <div class="note">采集口径：TTFT=首用户可见 token；吐字速率剔除 TTFT；stall=相邻 chunk 间隔 &gt; 500ms。</div>
+  </div>
+
+  <!-- 实时槽位 -->
+  <div class="card">
+    <h2>实时槽位 <span style="color:var(--muted);font-weight:400;text-transform:none;">（当前一轮内并发请求的实时进度）</span></h2>
+    <div id="slots"><div class="empty">点击「开始」运行。</div></div>
+  </div>
+
+  <!-- 汇总对比 -->
+  <div class="card">
+    <h2>档位对比（依次跑 1 / 2 / 4 后在此对比，每档取最近一次）</h2>
+    <div class="levels" id="levels"><div class="empty">暂无数据。先跑一个档位。</div></div>
+    <div class="charts" id="charts" style="margin-top:14px;"></div>
+  </div>
+
+  <!-- 明细 + 甘特 -->
+  <div class="card">
+    <h2>本次运行 · 明细与时间轴 <span id="hit-badge" class="badge hidden"></span></h2>
+    <div id="gantt" style="margin-bottom:10px;"></div>
+    <div id="rate-chart" style="margin-bottom:10px;"></div>
+    <table id="detail-table">
+      <thead><tr>
+        <th>#</th><th>状态</th><th>TTFT(ms)</th><th>总时长(ms)</th><th>字数</th>
+        <th>吐字/s</th><th>stall</th><th>速率趋势</th><th>卡顿带</th>
+      </tr></thead>
+      <tbody><tr><td colspan="9" class="empty">暂无</td></tr></tbody>
+    </table>
+    <div class="note">点任意行查看该请求的"吐字速率 vs 时间"曲线（红色段=低于中位速率 30% 的卡顿带）。</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (s) => document.querySelector(s);
+const led = $("#led"), statusEl = $("#status"), btnRun = $("#btn-run"), btnStop = $("#btn-stop");
+const slotsEl = $("#slots"), levelsEl = $("#levels"), chartsEl = $("#charts");
+const ganttEl = $("#gantt"), detailTbody = $("#detail-table").querySelector("tbody");
+
+let mode = "raw";
+let concurrency = 2;
+let running = false;
+let abortCtrl = null;
+const slotRows = new Map();          // reqId -> {el, chars}
+const levels = new Map();            // key `${mode}|${c}` -> {mode, concurrency, summary, wallMs, throughput}
+let lastReport = null;               // 供导出
+let allReports = [];                 // 历史所有 report（导出用）
+const completedSlots = [];           // 每次 start 内累计的 slot-done（含 timeline），明细/甘特/速率图唯一数据源
+let selectedReqId = null;            // 当前展开速率图的请求
+const hitBadge = $("#hit-badge"), rateChartEl = $("#rate-chart");
+
+const PRESETS = {
+  long: { text: "请写一篇题为《故乡的河》的中文散文，不少于 5000 字。要求：从童年记忆、河流的地理变迁、两岸人事更迭、对故乡的情感寄托四个方面依次展开，每个方面都要详尽细腻、细节丰富、语言优美。必须写满 5000 字以上，不得提前收尾或敷衍。", target: 5000 },
+  short: { text: "请用约 300 字介绍量子计算的基本原理，包括叠加、纠缠与门操作。", target: 300 },
+};
+
+// ===== 配置交互 =====
+$("#mode-seg").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-mode]"); if (!b) return;
+  mode = b.dataset.mode;
+  $("#mode-seg").querySelectorAll("button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".raw-only").forEach(el => el.classList.toggle("hidden", mode !== "raw"));
+  document.querySelectorAll(".e2e-only").forEach(el => el.classList.toggle("hidden", mode !== "e2e"));
+  renderLevels();
+});
+document.querySelectorAll(".quickrow button[data-c]").forEach(b => b.addEventListener("click", () => {
+  concurrency = Number(b.dataset.c);
+  $("#conc").value = concurrency;
+  document.querySelectorAll(".quickrow button[data-c]").forEach(x => x.classList.toggle("active", x === b));
+}));
+$("#conc").addEventListener("input", () => {
+  concurrency = Math.max(1, Math.min(64, Number($("#conc").value) || 1));
+  document.querySelectorAll(".quickrow button[data-c]").forEach(x =>
+    x.classList.toggle("active", Number(x.dataset.c) === concurrency));
+});
+
+// ===== 运行 =====
+btnRun.addEventListener("click", start);
+btnStop.addEventListener("click", () => { if (abortCtrl) abortCtrl.abort(); });
+$("#btn-json").addEventListener("click", () => download("bench-report.json", JSON.stringify(allReports, null, 2), "application/json"));
+$("#btn-md").addEventListener("click", () => download("bench-report.md", toMarkdown(), "text/markdown"));
+document.querySelectorAll("button.preset").forEach(b => b.addEventListener("click", () => {
+  const p = PRESETS[b.dataset.preset];
+  $("#prompt").value = p.text;
+  $("#target-chars").value = p.target;
+}));
+
+async function start() {
+  if (running) return;
+  const prompt = $("#prompt").value.trim();
+  if (!prompt) { alert("prompt 不能为空"); return; }
+  const rounds = Math.max(1, Math.min(100, Number($("#rounds").value) || 1));
+  const body = { mode, prompt, concurrency, rounds };
+  if (mode === "raw") { const m = $("#model").value.trim(); if (m) body.model = m; }
+  else {
+    const a = $("#agentId").value.trim(); if (!a) { alert("e2e 模式需要 agentId"); return; }
+    body.agentId = a; const j = $("#jwt").value.trim(); if (j) body.jwt = j;
+  }
+
+  running = true;
+  btnRun.disabled = true; btnStop.classList.remove("hidden");
+  led.className = "dot busy"; statusEl.textContent = `运行中 · ${labelMode()} · 并发 ${concurrency} · ${rounds} 轮`;
+  slotsEl.innerHTML = ""; slotRows.clear();
+  completedSlots.length = 0; selectedReqId = null;
+  hitBadge.classList.add("hidden"); rateChartEl.innerHTML = "";
+  detailTbody.innerHTML = '<tr><td colspan="9" class="empty">运行中…</td></tr>';
+
+  abortCtrl = new AbortController();
+  try {
+    const resp = await fetch("/bench/api/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), signal: abortCtrl.signal,
+    });
+    if (!resp.ok || !resp.body) {
+      const t = await resp.text().catch(() => "");
+      statusEl.textContent = "请求失败: " + t.slice(0, 200);
+      return;
+    }
+    await pumpSSE(resp.body);
+  } catch (err) {
+    if (err.name !== "AbortError") statusEl.textContent = "出错: " + err.message;
+  } finally {
+    running = false;
+    btnRun.disabled = false; btnStop.classList.add("hidden");
+    led.className = abortCtrl.signal.aborted ? "dot" : "dot ok";
+    statusEl.textContent = abortCtrl.signal.aborted ? "已中止" : "完成";
+    abortCtrl = null;
+  }
+}
+
+async function pumpSSE(body) {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let sep;
+    while ((sep = buf.indexOf("\n\n")) >= 0) {
+      const raw = buf.slice(0, sep); buf = buf.slice(sep + 2);
+      const lines = raw.split("\n").filter(l => l.startsWith("data:")).map(l => l.slice(5).replace(/^ /, ""));
+      const data = lines.join("\n").trim();
+      if (data) { try { handle(JSON.parse(data)); } catch {} }
+    }
+  }
+}
+
+function handle(ev) {
+  switch (ev.type) {
+    case "slot-start": slotStart(ev); break;
+    case "ttft": slotTtft(ev); break;
+    case "chunk": slotChunk(ev); break;
+    case "slot-error": slotFail(ev.reqId, ev.message); break;
+    case "slot-done": slotDone(ev); break;
+    case "report": onReport(ev); break;
+    case "fatal": statusEl.textContent = "后端错误: " + ev.message; break;
+  }
+}
+
+// ===== 槽位渲染 =====
+function slotStart(ev) {
+  if (slotRows.size === 0) slotsEl.innerHTML = "";
+  const el = document.createElement("div"); el.className = "slot";
+  el.innerHTML = `<span class="id">${ev.reqId}</span><span class="led wait"></span>` +
+    `<div class="bar"><i></i></div><span class="num ttft">—</span><span class="num chars">0 字</span><span class="num state">等待</span>`;
+  slotsEl.appendChild(el);
+  slotRows.set(ev.reqId, { el, chars: 0 });
+}
+function setLed(reqId, cls) { const r = slotRows.get(reqId); if (r) r.el.querySelector(".led").className = "led " + cls; }
+function slotTtft(ev) {
+  setLed(ev.reqId, "ttft");
+  const r = slotRows.get(ev.reqId); if (r) { r.el.querySelector(".ttft").textContent = ev.ms + "ms"; r.el.querySelector(".state").textContent = "首字"; }
+}
+function slotChunk(ev) {
+  const r = slotRows.get(ev.reqId); if (!r) return;
+  r.chars += ev.chars || 0;
+  setLed(ev.reqId, "stream");
+  const target = Math.max(1, Number($("#target-chars").value) || 1);
+  const pct = Math.min(100, (r.chars / target) * 100);
+  r.el.querySelector(".chars").textContent = `${r.chars}/${target} 字`;
+  r.el.querySelector(".state").textContent = "吐字";
+  r.el.querySelector(".bar > i").style.width = pct + "%";
+}
+function slotFail(reqId, msg) {
+  setLed(reqId, "fail");
+  const r = slotRows.get(reqId); if (r) r.el.querySelector(".state").textContent = "失败";
+}
+function slotDone(ev) {
+  const r = slotRows.get(ev.reqId);
+  if (r) {
+    setLed(ev.reqId, ev.ok ? "done" : "fail");
+    r.el.querySelector(".bar > i").style.width = "100%";
+    if (ev.ttft != null) r.el.querySelector(".ttft").textContent = ev.ttft + "ms";
+    const target = Math.max(1, Number($("#target-chars").value) || 1);
+    r.el.querySelector(".chars").textContent = `${ev.charCount || 0}/${target} 字`;
+    r.el.querySelector(".state").textContent = ev.ok ? `${ev.tEnd}ms` : "失败";
+    if (!ev.ok && ev.error) r.el.title = ev.error;
+  }
+  completedSlots.push(ev);
+  renderDetailFromSlots();
+  updateHitBadge();
+}
+
+function updateHitBadge() {
+  const hits = completedSlots.filter(s => s.stallHit);
+  const n = hits.length, total = completedSlots.length;
+  if (total === 0) { hitBadge.classList.add("hidden"); return; }
+  hitBadge.classList.remove("hidden");
+  if (n === 0) {
+    hitBadge.classList.add("ok");
+    hitBadge.textContent = `已跑 ${total} 次 · 暂未撞到卡顿`;
+  } else {
+    hitBadge.classList.remove("ok");
+    const maxSpan = Math.max(...hits.map(s => s.stallMaxSpanMs || 0));
+    hitBadge.textContent = `撞中卡顿 ${n}/${total} 次 · 最长低速带 ${maxSpan}ms`;
+  }
+}
+
+// ===== 报告聚合 =====
+function onReport(ev) {
+  lastReport = ev;
+  allReports.push(ev);
+  $("#btn-json").disabled = false; $("#btn-md").disabled = false;
+  const throughput = ev.wallMs > 0 ? ev.summary.totalTokens / (ev.wallMs / 1000) : 0;
+  levels.set(`${ev.mode}|${ev.concurrency}`, {
+    mode: ev.mode, concurrency: ev.concurrency,
+    summary: ev.summary, wallMs: ev.wallMs, throughput,
+  });
+  renderLevels();
+  renderDetailFromSlots();
+  renderGantt(completedSlots);
+  updateHitBadge();
+}
+
+function labelMode() { return mode === "raw" ? "纯模型直连" : "经中台"; }
+
+function renderLevels() {
+  if (levels.size === 0) { levelsEl.innerHTML = '<div class="empty">暂无数据。先跑一个档位。</div>'; chartsEl.innerHTML = ""; return; }
+  const arr = [...levels.values()].sort((a, b) => a.mode.localeCompare(b.mode) || a.concurrency - b.concurrency);
+  levelsEl.innerHTML = arr.map(l => {
+    const s = l.summary;
+    return `<div class="lvl"><div class="h">${l.mode === "raw" ? "直连" : "中台"} · 并发 ${l.concurrency}</div>` +
+      `<div class="big">${s.avgTtft}<span style="font-size:12px;color:var(--muted)">ms TTFT</span></div>` +
+      `<div class="row"><span>avg 吐字</span><b>${s.avgTokensPerSec} tok/s</b></div>` +
+      `<div class="row"><span>P95 TTFT</span><b>${s.p95Ttft}ms</b></div>` +
+      `<div class="row"><span>整轮吞吐</span><b>${l.throughput.toFixed(1)} tok/s</b></div>` +
+      `<div class="row"><span>avg stall</span><b>${s.avgStalls}</b></div>` +
+      (s.stallHits > 0
+        ? `<div class="row" style="color:var(--red)"><span>卡顿撞中</span><b>${s.stallHits}/${s.total} · ${s.stallMaxSpanMs}ms</b></div>`
+        : `<div class="row"><span>卡顿撞中</span><b>0/${s.total}</b></div>`) +
+      (s.failed ? `<div class="row" style="color:var(--red)"><span>失败</span><b>${s.failed}/${s.total}</b></div>` : "") +
+      `</div>`;
+  }).join("");
+  renderCharts(arr);
+}
+
+function efficiencyOf(arr, c, m) {
+  const base = arr.find(x => x.mode === m && x.concurrency === 1);
+  if (!base || base.throughput === 0) return null;
+  const cur = arr.find(x => x.mode === m && x.concurrency === c);
+  return cur ? cur.throughput / (base.throughput * c) : null;
+}
+
+function renderCharts(arr) {
+  const modes = [...new Set(arr.map(x => x.mode))];
+  const metrics = [
+    { key: "avgTtft", name: "平均 TTFT (ms)", get: l => l.summary.avgTtft, fmt: v => v + "ms", lowerBetter: true },
+    { key: "throughput", name: "整轮吞吐 (tok/s)", get: l => l.throughput, fmt: v => v.toFixed(1) },
+    { key: "eff", name: "并发效率 (vs 串行)", get: l => efficiencyOf(arr, l.concurrency, l.mode) ?? 0, fmt: v => (v * 100).toFixed(0) + "%" },
+  ];
+  chartsEl.innerHTML = metrics.map(m => {
+    const vals = arr.map(l => m.get(l) || 0);
+    const max = Math.max(1, ...vals);
+    const bars = arr.map((l, i) => {
+      const v = m.get(l) || 0;
+      const h = Math.round((v / max) * 80);
+      const color = l.mode === "raw" ? "var(--accent)" : "var(--purple)";
+      return `<g transform="translate(${i * 60},0)">` +
+        `<rect x="6" y="${90 - h}" width="36" height="${h}" fill="${color}" rx="2"/>` +
+        `<text x="24" y="${100}" text-anchor="middle" fill="var(--muted)" font-size="10" font-family="monospace">c${l.concurrency}</text>` +
+        `<text x="24" y="${88 - h}" text-anchor="middle" fill="var(--text)" font-size="10" font-family="monospace">${m.fmt(v)}</text>` +
+        `</g>`;
+    }).join("");
+    return `<div class="chart"><h3>${m.name}</h3><svg viewBox="0 0 ${arr.length * 60} 110" preserveAspectRatio="xMidYMid meet">${bars}</svg></div>`;
+  }).join("");
+}
+
+function renderDetailFromSlots() {
+  const rows = completedSlots.map((d, i) => {
+    const rate = (d.ttft != null && d.tEnd != null && d.tEnd > d.ttft && d.tokenCount)
+      ? (d.tokenCount / ((d.tEnd - d.ttft) / 1000)).toFixed(1) : "—";
+    const hit = d.stallHit;
+    const cell = hit
+      ? `<td class="m hit-cell">撞中 ${d.stallMaxSpanMs || 0}ms</td>`
+      : `<td class="m hit-cell none">—</td>`;
+    return `<tr class="${d.ok ? "" : "fail"}${d.reqId === selectedReqId ? " sel" : ""}" data-req="${d.reqId}">` +
+      `<td>${i}</td><td>${d.ok ? "✓" : "✗"}</td>` +
+      `<td class="m">${d.ttft ?? "—"}</td><td class="m">${d.tEnd ?? "—"}</td>` +
+      `<td class="m">${d.charCount ?? "—"}</td><td class="m">${rate}</td>` +
+      `<td class="m">${d.stalls ?? 0}</td>` +
+      `<td>${sparkline(d.timeline, hit)}</td>` + cell + `</tr>`;
+  }).join("");
+  detailTbody.innerHTML = rows || '<tr><td colspan="9" class="empty">暂无</td></tr>';
+  detailTbody.querySelectorAll("tr[data-req]").forEach(tr =>
+    tr.addEventListener("click", () => {
+      selectedReqId = tr.dataset.req;
+      renderDetailFromSlots();
+      renderRateChart();
+    }));
+}
+
+function sparkline(tl, hit) {
+  if (!tl || tl.length < 2) return `<svg class="spark"></svg>`;
+  const w = 90, h = 22, max = Math.max(1, ...tl);
+  const pts = tl.map((v, i) => `${(i / (tl.length - 1)) * w},${h - (v / max) * (h - 2) - 1}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${hit ? "var(--red)" : "var(--accent)"}" stroke-width="1.2"/></svg>`;
+}
+
+function renderRateChart() {
+  const d = completedSlots.find(s => s.reqId === selectedReqId);
+  if (!d || !d.timeline || d.timeline.length < 2) { rateChartEl.innerHTML = ""; return; }
+  const tl = d.timeline, bms = d.bucketMs || 1000;
+  const W = 760, H = 150, padL = 46, padB = 22, padT = 18;
+  const max = Math.max(1, ...tl);
+  const sorted = [...tl].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 0;
+  const thr = median * 0.3;
+  const x = (i) => padL + (i / (tl.length - 1)) * (W - padL - 10);
+  const y = (v) => H - padB - (v / max) * (H - padB - padT);
+  const barW = Math.max(1, (W - padL - 10) / tl.length - 1);
+  const bars = tl.map((v, i) => {
+    const low = v < thr;
+    const bh = (v / max) * (H - padB - padT);
+    return `<rect x="${x(i).toFixed(1)}" y="${(H - padB - bh).toFixed(1)}" width="${barW.toFixed(1)}" height="${bh.toFixed(1)}" fill="${low ? "var(--red)" : "var(--accent)"}" opacity="${low ? 0.9 : 0.55}"/>`;
+  }).join("");
+  const lineMedian = `<line x1="${padL}" y1="${y(median)}" x2="${W - 10}" y2="${y(median)}" stroke="var(--green)" stroke-dasharray="4 3"/>`;
+  const lineThr = `<line x1="${padL}" y1="${y(thr)}" x2="${W - 10}" y2="${y(thr)}" stroke="var(--red)" stroke-dasharray="4 3"/>`;
+  const labels = `<text x="4" y="${y(median) + 3}" fill="var(--green)" font-size="9" font-family="monospace">中位${median.toFixed(0)}</text>` +
+    `<text x="4" y="${y(thr) - 2}" fill="var(--red)" font-size="9" font-family="monospace">阈值${thr.toFixed(0)}</text>`;
+  const bands = (d.stallBands || []).map(b =>
+    `<rect x="${padL + (b.startMs / (tl.length * bms)) * (W - padL - 10)}" y="${padT}" width="${(b.spanMs / (tl.length * bms)) * (W - padL - 10)}" height="${H - padB - padT}" fill="rgba(248,81,73,0.08)"/>`).join("");
+  const title = `<text x="${padL}" y="13" fill="var(--text)" font-size="11">${d.reqId} · 吐字速率 vs 时间（每桶 ${bms}ms · 红柱/红阴影=低于中位 30% 的卡顿带）</text>`;
+  rateChartEl.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">${bands}${title}${bars}${lineMedian}${lineThr}${labels}</svg>`;
+}
+
+function renderGantt(details) {
+  if (!details.length) { ganttEl.innerHTML = ""; return; }
+  const t0s = details.map(d => d.t0).filter(Boolean);
+  if (!t0s.length) { ganttEl.innerHTML = ""; return; }
+  const minT0 = Math.min(...t0s);
+  const ends = details.map(d => (d.t0 - minT0) + (d.tEnd || 0));
+  const maxT = Math.max(1, ...ends);
+  const colors = ["var(--accent)", "var(--green)", "var(--purple)", "var(--amber)", "var(--blue)"];
+  const rowH = 16, pad = 8;
+  const h = details.length * rowH + pad;
+  const W = 760;
+  const bars = details.map((d, i) => {
+    const x = ((d.t0 - minT0) / maxT) * (W - 60) + 50;
+    const w = Math.max(2, ((d.tEnd || 0) / maxT) * (W - 60));
+    const color = colors[(Math.floor((d.t0 - minT0) / 1000)) % colors.length];
+    const yy = i * rowH + 4;
+    return `<rect x="${x.toFixed(1)}" y="${yy}" width="${w.toFixed(1)}" height="10" fill="${color}" rx="2" opacity="${d.ok ? 0.9 : 0.4}"/>` +
+      `<text x="4" y="${yy + 9}" fill="var(--muted)" font-size="9" font-family="monospace">#${i}</text>`;
+  }).join("");
+  // 时间刻度
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(p => {
+    const x = p * (W - 60) + 50;
+    const ms = Math.round(p * maxT);
+    return `<line x1="${x}" y1="${h - 6}" x2="${x}" y2="${h}" stroke="var(--border)"/>` +
+      `<text x="${x}" y="${h + 8}" text-anchor="middle" fill="var(--muted)" font-size="9" font-family="monospace">${ms}</text>`;
+  }).join("");
+  ganttEl.innerHTML = `<svg viewBox="0 0 ${W} ${h + 14}" preserveAspectRatio="xMidYMid meet">${bars}${ticks}</svg>`;
+}
+
+// ===== 导出 =====
+function download(name, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// 把一次请求的吐字速率时间轴画成 ASCII 形态条（供 Markdown 报告嵌入）。
+// 速率→block 字符高度；低于中位 30% 的卡顿段在下方用 ▼ 标出；附时间刻度。
+function renderAsciiTimeline(d) {
+  const tl = d.timeline || [];
+  if (tl.length < 2) return null;
+  const bms = d.bucketMs || 1000;
+  const W = 52;
+  const BLOCKS = " ·▁▂▃▄▅▆▇█";
+  // 降采样到 W 宽（取每段代表点）
+  const sample = [];
+  for (let i = 0; i < W; i++) sample.push(tl[Math.min(tl.length - 1, Math.floor(i * tl.length / W))]);
+  const max = Math.max(1, ...sample);
+  const sorted = [...sample].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || max;
+  const thr = median * 0.3;
+  const toBar = (v) => v <= 0 ? "·" : BLOCKS[Math.max(2, Math.min(9, Math.round((v / max) * 7) + 2))];
+  const bar = sample.map(toBar).join("");
+  const mark = sample.map(v => (v < thr ? "▼" : " ")).join("");
+  const totalSec = (tl.length * bms) / 1000;
+  const scaleArr = Array(W).fill(" ");
+  [0, 0.25, 0.5, 0.75, 1].forEach(p => {
+    const col = Math.round(p * (W - 1));
+    const lbl = Math.round(p * totalSec) + "s";
+    for (let k = 0; k < lbl.length && col + k < W; k++) scaleArr[col + k] = lbl[k];
+  });
+  const medianStr = median.toFixed(0);
+  return { bar, mark, scale: scaleArr.join(""), totalSec: totalSec.toFixed(1), median: medianStr, bms };
+}
+
+function toMarkdown() {
+  const arr = [...levels.values()].sort((a, b) => a.mode.localeCompare(b.mode) || a.concurrency - b.concurrency);
+  const lines = [];
+  lines.push("# 本地模型并发性能压测报告");
+  lines.push("");
+  lines.push(`- 生成时间: ${new Date().toLocaleString()}`);
+  lines.push(`- 测试轮次: 共 ${allReports.length} 次（每档取最近一次对比）`);
+  lines.push("");
+  lines.push("## 档位对比");
+  lines.push("");
+  lines.push("| 链路 | 并发 | avgTTFT(ms) | P95 TTFT | 吐字(tok/s) | 整轮吞吐 | 并发效率 | stall次数 | 卡顿撞中 | 失败 |");
+  lines.push("|---|---|---|---|---|---|---|---|---|---|");
+  arr.forEach(l => {
+    const eff = efficiencyOf(arr, l.concurrency, l.mode);
+    const s = l.summary;
+    const hit = s.stallHits > 0 ? `**${s.stallHits}/${s.total}（最长${s.stallMaxSpanMs}ms，低至${s.stallMinRate}tok/s）**` : `0/${s.total}`;
+    lines.push(`| ${l.mode === "raw" ? "直连" : "中台"} | ${l.concurrency} | ${s.avgTtft} | ${s.p95Ttft} | ${s.avgTokensPerSec} | ${l.throughput.toFixed(1)} | ${(eff == null ? "—" : (eff * 100).toFixed(0) + "%")} | ${s.avgStalls} | ${hit} | ${s.failed}/${s.total} |`);
+  });
+  lines.push("");
+  lines.push("## 自动判读");
+  lines.push("");
+  const byMode = new Map();
+  arr.forEach(l => { if (!byMode.has(l.mode)) byMode.set(l.mode, []); byMode.get(l.mode).push(l); });
+  byMode.forEach((ls, m) => {
+    ls.sort((a, b) => a.concurrency - b.concurrency);
+    const c1 = ls.find(x => x.concurrency === 1);
+    const cN = ls[ls.length - 1];
+    lines.push(`### ${m === "raw" ? "纯模型直连" : "经中台"}`);
+    if (c1 && cN && cN.concurrency > 1) {
+      const ttftRatio = (cN.summary.avgTtft / Math.max(1, c1.summary.avgTtft)).toFixed(2);
+      const eff = efficiencyOf(ls, cN.concurrency, m);
+      lines.push(`- 并发从 1 → ${cN.concurrency}：平均 TTFT ${c1.summary.avgTtft}ms → ${cN.summary.avgTtft}ms（${ttftRatio} 倍）。`);
+      if (ttftRatio > 1.5) lines.push(`- **TTFT 显著劣化**，排队/调度延迟是主要瓶颈。`);
+      if (eff != null) {
+        if (eff > 0.85) lines.push(`- 并发效率 ${(eff*100).toFixed(0)}%，接近线性扩展，吞吐良好。`);
+        else if (eff > 0.6) lines.push(`- 并发效率 ${(eff*100).toFixed(0)}%，有抢占劣化但可接受。`);
+        else lines.push(`- **并发效率仅 ${(eff*100).toFixed(0)}%**，吞吐抢占严重，高并发收益递减。`);
+      }
+      if (cN.summary.avgStalls > c1.summary.avgStalls + 0.5) lines.push(`- stall 次数 ${c1.summary.avgStalls} → ${cN.summary.avgStalls}，流式出现卡顿加重。`);
+    } else {
+      lines.push(`- 仅测了并发 ${ls.map(x => x.concurrency).join("/")}，建议补测并发 1 作为基线。`);
+    }
+    lines.push("");
+  });
+  // 本次运行偶发卡顿小结
+  const allHits = completedSlots.filter(s => s.stallHit);
+  lines.push("## 偶发卡顿小结");
+  lines.push("");
+  if (completedSlots.length === 0) {
+    lines.push("- 暂无数据。");
+  } else if (allHits.length === 0) {
+    lines.push(`- 共 ${completedSlots.length} 次请求，未观察到卡顿带（低于中位速率 30% 且连续 ≥2 桶）。可加大轮次或并发复测。`);
+  } else {
+    const maxSpan = Math.max(...allHits.map(s => s.stallMaxSpanMs || 0));
+    lines.push(`- 共 ${completedSlots.length} 次请求，**撞中卡顿 ${allHits.length} 次**，最长低速带 ${maxSpan}ms。`);
+    lines.push("");
+    lines.push("### 卡顿形态时间轴");
+    lines.push("");
+    lines.push("速率条高度 = 该段 tok/s（█ 高 → ▁ 低，· 为无产出空段）；▼ 行标出低于中位 30% 的卡顿段。");
+    lines.push("");
+    allHits.forEach(s => {
+      const t = renderAsciiTimeline(s);
+      const bands = s.stallBands || [];
+      lines.push("```");
+      lines.push(`${s.reqId} · 总 ${t ? t.totalSec : "?"}s · 卡顿 ${bands.length} 段 · 正常中位 ~${t ? t.median : "?"} tok/s · 每格 ${t ? t.bms : "?"}ms`);
+      if (t) {
+        lines.push("速率 " + t.bar);
+        lines.push("卡顿 " + t.mark);
+        lines.push("时间 " + t.scale);
+      }
+      lines.push("```");
+      bands.forEach(b =>
+        lines.push(`  - ${b.startMs}~${b.startMs + b.spanMs}ms · 持续 ${b.spanMs}ms · 谷底 ${b.rate} tok/s`));
+      lines.push("");
+    });
+  }
+  lines.push("");
+  lines.push("## 本次运行明细");
+  if (completedSlots.length) {
+    lines.push("");
+    lines.push("| # | reqId | 状态 | TTFT(ms) | 总时长(ms) | 字数 | stall | 卡顿带 |");
+    lines.push("|---|---|---|---|---|---|---|---|");
+    completedSlots.forEach((d, i) => {
+      const bands = (d.stallBands || []).map(b => `${b.startMs}~${b.startMs + b.spanMs}ms(${b.rate})`).join("; ") || "—";
+      lines.push(`| ${i} | ${d.reqId} | ${d.ok ? "✓" : "✗"} | ${d.ttft ?? "—"} | ${d.tEnd ?? "—"} | ${d.charCount ?? "—"} | ${d.stalls ?? 0} | ${bands} |`);
+    });
+  }
+  return lines.join("\n");
+}
+</script>
+</body>
+</html>

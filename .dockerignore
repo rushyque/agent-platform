@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.git/
+.gitignore
+.env
+.env.example
+*.md
+PLAN.md
+.claude/
+Dockerfile*
+docker-compose*.yml
+.dockerignore

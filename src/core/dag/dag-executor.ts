@@ -1,0 +1,228 @@
+import { randomUUID } from "node:crypto";
+import { streamText, type LanguageModel } from "ai";
+import { EventType } from "@ag-ui/client";
+import type { Message } from "@ag-ui/core";
+import type {
+  DAGDefinition,
+  DAGStep,
+  ToolDefinition,
+  AgentContext,
+} from "../../types/agent-config.js";
+import { saveCheckpoint } from "./checkpoint.js";
+import { insertArtifact, summarizeToolResult } from "../context/artifact-store.js";
+import { DEFAULT_POLICY } from "../context/policy.js";
+
+// DAG 执行上下文
+export interface DAGExecutionContext {
+  threadId: string;
+  runId: string;
+  messages: Message[];
+  context: AgentContext;
+  tools: ToolDefinition[];
+  createModel: () => LanguageModel;
+  emit: (event: any) => void;
+  abortSignal?: AbortSignal;
+}
+
+// 从 state 中按点号路径取值
+function getStateValue(state: Record<string, any>, path: string): any {
+  return path.split(".").reduce((acc, key) => (acc == null ? acc : acc[key]), state);
+}
+
+// 把 prompt 里的 ${state.path} 占位符替换为实际值（对象/数组序列化为 JSON）
+function interpolate(prompt: string, state: Record<string, any>): string {
+  return prompt.replace(/\$\{state\.([a-zA-Z0-9_.]+)\}/g, (_match, path: string) => {
+    const value = getStateValue(state, path);
+    if (value == null) return "";
+    return typeof value === "string" ? value : JSON.stringify(value);
+  });
+}
+
+function resolveNext(step: DAGStep, state: Record<string, any>): string {
+  return typeof step.next === "function" ? step.next(state) : step.next;
+}
+
+// 主执行循环
+export async function executeDAG(
+  definition: DAGDefinition,
+  ctx: DAGExecutionContext
+): Promise<Record<string, any>> {
+  const stepsById = new Map<string, DAGStep>();
+  for (const step of definition.steps) stepsById.set(step.id, step);
+
+  const state: Record<string, any> = {};
+
+  // 从第一个 step 开始
+  let currentStepId = definition.steps[0]?.id;
+  // 防死循环：限制最大步数
+  const MAX_STEPS = 50;
+  let stepCount = 0;
+
+  while (currentStepId && currentStepId !== "__end__" && stepCount < MAX_STEPS) {
+    stepCount++;
+    const step = stepsById.get(currentStepId);
+    if (!step) throw new Error(`DAG step not found: ${currentStepId}`);
+
+    ctx.emit({ type: EventType.STEP_STARTED, stepId: step.id });
+
+    // 每步执行后保存检查点（容错：中断后可从断点续跑）
+    try {
+      await executeStep(step, state, ctx);
+      await saveCheckpoint(ctx.threadId, step.id, state).catch((err) =>
+        console.error("[DAG] checkpoint save failed:", (err as Error).message)
+      );
+    } catch (err) {
+      ctx.emit({
+        type: EventType.RUN_ERROR,
+        message: `DAG step "${step.id}" failed: ${(err as Error).message}`,
+        code: "DAG_STEP_ERROR",
+      });
+      throw err;
+    }
+
+    ctx.emit({ type: EventType.STEP_FINISHED, stepId: step.id });
+    currentStepId = resolveNext(step, state);
+  }
+
+  if (stepCount >= MAX_STEPS) {
+    throw new Error(`DAG exceeded max steps (${MAX_STEPS}), possible cycle`);
+  }
+
+  return state;
+}
+
+async function executeStep(
+  step: DAGStep,
+  state: Record<string, any>,
+  ctx: DAGExecutionContext
+): Promise<void> {
+  switch (step.type) {
+    case "tool":
+      await executeToolStep(step, state, ctx);
+      break;
+    case "llm":
+      await executeLLMStep(step, state, ctx);
+      break;
+    case "condition":
+      // condition 步骤在 resolveNext 中通过 step.next(state) 决定跳转；
+      // 此处若提供了 condition 函数也执行一次（可做副作用/日志），不改变 state
+      if (step.condition) step.condition(state);
+      break;
+    case "transform":
+      if (step.transform) {
+        const transformed = step.transform(state);
+        Object.assign(state, transformed);
+      }
+      break;
+  }
+}
+
+async function executeToolStep(
+  step: DAGStep,
+  state: Record<string, any>,
+  ctx: DAGExecutionContext
+): Promise<void> {
+  const tool = ctx.tools.find((t) => t.name === step.toolName);
+  if (!tool) throw new Error(`DAG tool not found: ${step.toolName}`);
+
+  const args = step.toolArgs ? step.toolArgs(state) : {};
+  const toolCallId = `dagtool-${randomUUID()}`;
+
+  ctx.emit({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: tool.name });
+  ctx.emit({
+    type: EventType.TOOL_CALL_ARGS,
+    toolCallId,
+    delta: JSON.stringify(args),
+  });
+  ctx.emit({ type: EventType.TOOL_CALL_END, toolCallId });
+
+  const result = await tool.execute(args, ctx.context);
+
+  // 工具结果外置：完整结果落 artifact 表，emit 只发 ref+summary。
+  // state 仍存完整 result —— DAG 为确定性编排、步数有限，后续 LLM 步用 ${state.stepId} 插值需要完整数据。
+  const summary = summarizeToolResult(result, DEFAULT_POLICY.toolResultSummaryChars);
+  let ref: string | null = null;
+  try {
+    ref = await insertArtifact({
+      threadId: ctx.threadId,
+      runId: ctx.runId,
+      toolName: tool.name,
+      args,
+      result,
+      summary,
+    });
+  } catch (err) {
+    console.error(`[DAG artifact] insert failed for ${tool.name}:`, (err as Error).message);
+  }
+  const emitted = ref ? { ref, toolName: tool.name, summary } : result;
+
+  ctx.emit({
+    type: EventType.TOOL_CALL_RESULT,
+    toolCallId,
+    messageId: `${toolCallId}-result`,
+    role: "tool",
+    content: JSON.stringify(emitted),
+  });
+
+  // 结果写入 state（用 step.id 作为 key，便于后续 prompt 引用）
+  state[step.id] = result;
+}
+
+async function executeLLMStep(
+  step: DAGStep,
+  state: Record<string, any>,
+  ctx: DAGExecutionContext
+): Promise<void> {
+  if (!step.prompt) throw new Error(`DAG llm step "${step.id}" missing prompt`);
+
+  const system = interpolate(step.prompt, state);
+  const messageId = `dagmsg-${randomUUID()}`;
+  let reasoningOpen = false;
+
+  ctx.emit({ type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant" });
+
+  const result = streamText({
+    model: ctx.createModel(),
+    system,
+    messages: ctx.messages as any,
+    abortSignal: ctx.abortSignal,
+  });
+
+  let fullText = "";
+  for await (const part of result.fullStream as any) {
+    if (part.type === "text-delta") {
+      // ai v5 + openai.chat 的 text-delta 携带 text 字段（实测，亦为 CopilotKit 转换器所读）
+      const text = part.text ?? part.delta ?? "";
+      fullText += text;
+      ctx.emit({
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId,
+        delta: text,
+      });
+    } else if (part.type === "reasoning-start") {
+      if (!reasoningOpen) {
+        reasoningOpen = true;
+        ctx.emit({ type: EventType.REASONING_START, id: messageId });
+      }
+    } else if (part.type === "reasoning-delta") {
+      ctx.emit({
+        type: EventType.REASONING_MESSAGE_CONTENT,
+        id: messageId,
+        delta: part.delta ?? "",
+      });
+    } else if (part.type === "reasoning-end") {
+      // 由循环末尾统一收尾
+    } else if (part.type === "error") {
+      throw new Error(`LLM stream error: ${(part as any).error?.message ?? "unknown"}`);
+    }
+  }
+
+  if (reasoningOpen) {
+    ctx.emit({ type: EventType.REASONING_END, id: messageId });
+  }
+  ctx.emit({ type: EventType.TEXT_MESSAGE_END, messageId });
+
+  // 写入 state，供下游引用
+  const outputKey = step.outputKey ?? step.id;
+  state[outputKey] = fullText;
+}

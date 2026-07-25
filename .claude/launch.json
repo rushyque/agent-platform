@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agent-platform",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 9876
+    },
+    {
+      "name": "agent-platform-alt",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "set RUNTIME_PORT=9877&&set RUNTIME_HOST=127.0.0.1&&npx tsx watch src/server.ts"],
+      "port": 9877
+    }
+  ]
+}

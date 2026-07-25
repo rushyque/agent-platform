@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>空运询比价 · 智能中台</title>
+<style>
+  :root{
+    --bg:#080c12;
+    --panel:#0f141d; --panel2:#0b0f16; --elev:#16202c;
+    --border:rgba(120,170,210,.10); --border2:rgba(120,170,210,.20);
+    --txt:#e8eef5; --dim:#8c99a8; --faint:#586472;
+    --cyan:#39d0ff; --blue:#5b8bff; --green:#3ddc97; --amber:#ffb24a; --red:#ff6b7b; --violet:#a78bfa;
+    --grad:linear-gradient(135deg,var(--cyan),var(--blue));
+    --shadow:0 8px 30px rgba(0,0,0,.45);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;font:14px/1.55 var(--sans);color:var(--txt);overflow:hidden;
+    background:
+      radial-gradient(1000px 520px at 84% -10%, rgba(57,208,255,.10), transparent 60%),
+      radial-gradient(820px 520px at -10% 110%, rgba(91,139,255,.08), transparent 60%),
+      var(--bg);
+  }
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:#1d2733;border-radius:8px}
+  ::-webkit-scrollbar-thumb:hover{background:#283544}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  header{height:56px;display:flex;align-items:center;gap:16px;padding:0 18px;background:rgba(8,12,18,.72);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);position:relative;z-index:6}
+  .mark{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:var(--grad);font-weight:800;font-size:15px;color:#04111a;box-shadow:0 2px 14px rgba(57,208,255,.4)}
+  .brand{display:flex;align-items:center;gap:11px;min-width:240px}
+  .brand h1{font-size:14px;margin:0;font-weight:700;letter-spacing:.3px}
+  .brand .sub{font-size:10.5px;color:var(--faint);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase}
+  .top-conn{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:12px;color:var(--dim)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+  .dot.ok{background:var(--green);box-shadow:0 0 10px rgba(61,220,151,.6);animation:pulse 2.4s ease infinite}
+  @keyframes pulse{50%{transform:scale(1.25);opacity:.7}}
+  .btn{background:transparent;border:1px solid var(--border2);color:var(--dim);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-family:inherit;transition:.15s}
+  .btn:hover{border-color:var(--cyan);color:var(--txt);background:rgba(57,208,255,.08)}
+  .btn.danger:hover{border-color:var(--red);color:var(--red);background:rgba(255,107,123,.08)}
+
+  main{display:grid;grid-template-columns:384px 1fr 330px;gap:13px;padding:13px;height:calc(100vh - 56px)}
+  .col{display:flex;flex-direction:column;gap:12px;min-height:0;min-width:0}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .card-h{display:flex;align-items:center;gap:8px;padding:11px 15px;border-bottom:1px solid var(--border);flex:0 0 auto}
+  .card-h .t{font-size:11px;color:var(--dim);letter-spacing:1.3px;text-transform:uppercase;font-weight:700}
+  .card-h .n{margin-left:auto;font-size:11px;color:var(--cyan);font-family:var(--mono);background:rgba(57,208,255,.10);padding:1px 8px;border-radius:20px}
+  .card-body{flex:1;overflow-y:auto;min-height:0}
+
+  /* 左：对话 */
+  .threads{display:flex;flex-direction:column;gap:2px;padding:6px;border-bottom:1px solid var(--border);max-height:128px;overflow-y:auto;flex:0 0 auto}
+  .thread{display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:7px;cursor:pointer;font-size:12.5px;color:var(--dim);transition:.12s}
+  .thread:hover{background:var(--elev);color:var(--txt)}
+  .thread.active{background:rgba(57,208,255,.13);color:var(--txt)}
+  .thread .tt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .thread .tx{opacity:0;font-size:12px;color:var(--faint);padding:0 4px}
+  .thread:hover .tx{opacity:1}
+  .thread .tx:hover{color:var(--red)}
+  .new-chat{margin:7px 6px 3px}
+  #chat-log{flex:1;overflow-y:auto;padding:15px 15px 4px;display:flex;flex-direction:column;gap:15px}
+  .msg{max-width:92%;padding:9px 13px;border-radius:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;animation:fade .3s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .msg.user{align-self:flex-end;background:linear-gradient(180deg,rgba(57,208,255,.16),rgba(91,139,255,.14));border:1px solid rgba(57,208,255,.3);color:#eaf6ff}
+  .msg.ai{align-self:flex-start;background:var(--elev);border:1px solid var(--border)}
+  .msg.sys{align-self:center;background:transparent;color:var(--faint);font-size:11px;border:1px dashed var(--border2);max-width:100%;text-align:center}
+  .msg .who{font-size:10px;color:var(--cyan);margin-bottom:3px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.5px;opacity:.8}
+  .md-body{font-size:13px;line-height:1.65}
+  .md-body p{margin:0 0 7px} .md-body p:last-child{margin-bottom:0}
+  .md-body h1,.md-body h2,.md-body h3,.md-body h4{margin:11px 0 5px;font-weight:700;color:var(--txt);line-height:1.3}
+  .md-body h1{font-size:15px} .md-body h2{font-size:14px} .md-body h3{font-size:13.5px} .md-body h4{font-size:13px}
+  .md-body ul,.md-body ol{margin:4px 0 8px;padding-left:20px} .md-body li{margin:2px 0}
+  .md-body strong{color:var(--cyan);font-weight:600}
+  .md-body code{background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:0 4px;font-family:var(--mono);font-size:11.5px;color:var(--amber)}
+  .md-body pre.md-code{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;overflow:auto;margin:6px 0}
+  .md-body pre.md-code code{background:none;border:none;padding:0;color:var(--dim)}
+  .md-body hr.md-hr{border:none;border-top:1px solid var(--border2);margin:10px 0}
+  .md-body table.md{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px;display:block;overflow-x:auto}
+  .md-body table.md th,.md-body table.md td{border:1px solid var(--border);padding:5px 8px;text-align:left;vertical-align:top}
+  .md-body table.md th{background:var(--panel2);color:var(--cyan);font-weight:600;font-size:11px;white-space:nowrap}
+  .md-body table.md tr:nth-child(even) td{background:rgba(255,255,255,.018)}
+  .chat-input{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border);flex:0 0 auto}
+  .chat-input textarea{flex:1;resize:none;height:50px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;color:var(--txt);padding:10px;font-size:13px;font-family:inherit;line-height:1.5}
+  .chat-input textarea:focus{outline:none;border-color:var(--cyan);box-shadow:0 0 0 3px rgba(57,208,255,.15)}
+  .send{padding:0 16px;border-radius:9px;border:none;background:var(--grad);color:#04111a;font-size:13px;font-weight:700;cursor:pointer}
+  .send:hover{filter:brightness(1.08)} .send:disabled{opacity:.4;cursor:not-allowed}
+  .stop{padding:0 12px;border-radius:9px;border:1px solid var(--border2);background:transparent;color:var(--dim);font-size:12px;cursor:pointer}
+  .quick{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;border-top:1px solid var(--border);flex:0 0 auto}
+  .quick button{font-size:11px;padding:4px 10px;border-radius:14px;background:var(--panel2);border:1px solid var(--border);color:var(--dim);cursor:pointer;font-family:inherit;transition:.12s}
+  .quick button:hover{color:var(--cyan);border-color:rgba(57,208,255,.4);background:rgba(57,208,255,.06)}
+
+  /* 中：KPI + 询价 + 报价对比 + 推荐 */
+  .kbar{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border)}
+  .kbar .k{padding:11px 14px;background:var(--panel);display:flex;flex-direction:column;gap:3px}
+  .kbar .kl{font-size:10px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;font-family:var(--mono)}
+  .kbar .kv{font-family:var(--mono);font-size:21px;font-weight:700;line-height:1}
+  .kbar .inq .kv{color:var(--cyan)} .kbar .quo .kv{color:var(--blue)} .kbar .eva .kv{color:var(--violet)} .kbar .con .kv{color:var(--green)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px;border-bottom:1px solid var(--border);flex:0 0 auto}
+  .chip{font-size:11.5px;padding:4px 11px;border-radius:14px;background:var(--panel2);border:1px solid var(--border);color:var(--dim);cursor:pointer;font-family:inherit}
+  .chip:hover{color:var(--txt);border-color:var(--border2)}
+  .chip.active{background:rgba(57,208,255,.14);border-color:rgba(57,208,255,.5);color:var(--cyan)}
+  .chip .st{font-size:9.5px;opacity:.7;margin-left:5px}
+
+  /* 推荐卡 */
+  .recom{padding:13px 15px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,rgba(57,208,255,.06),transparent)}
+  .recom.empty{background:none}
+  .recom .rh{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .recom .rh .tag{font-size:10px;color:var(--violet);font-family:var(--mono);letter-spacing:1px;text-transform:uppercase;font-weight:700}
+  .recom .rh .pref{margin-left:auto;font-size:11px;color:var(--amber)}
+  .recom .pick{font-size:18px;font-weight:700;color:var(--cyan);margin-bottom:5px}
+  .recom .reason{font-size:12.5px;color:var(--dim);line-height:1.65}
+  .rank{display:flex;flex-direction:column;gap:5px;margin-top:9px}
+  .rank-row{display:flex;align-items:center;gap:9px;font-size:11.5px;padding:5px 8px;background:var(--panel2);border-radius:7px;border:1px solid var(--border)}
+  .rank-row.top{border-color:rgba(57,208,255,.4);background:rgba(57,208,255,.07)}
+  .rank-row .pos{font-family:var(--mono);color:var(--faint);width:14px}
+  .rank-row .nm{flex:1;color:var(--txt);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rank-row .sc{font-family:var(--mono);color:var(--cyan);font-weight:700}
+  .rank-row .pc{font-size:10.5px;color:var(--faint);max-width:55%}
+
+  /* 报价对比表 */
+  .qt-wrap{padding:10px 14px}
+  table.qt{width:100%;border-collapse:collapse;font-size:12px}
+  table.qt th{text-align:left;font-size:10px;color:var(--faint);font-family:var(--mono);text-transform:uppercase;letter-spacing:.5px;padding:7px 8px;border-bottom:1px solid var(--border2);font-weight:600}
+  table.qt td{padding:8px;border-bottom:1px solid var(--border);color:var(--txt)}
+  table.qt td.num{font-family:var(--mono);text-align:right}
+  table.qt tr.rec td{background:rgba(57,208,255,.07)}
+  table.qt tr.rec td:first-child{box-shadow:inset 3px 0 0 var(--cyan)}
+  table.qt .nm-cell{font-weight:600}
+  table.qt .nm-cell .sty{font-size:10px;color:var(--faint);display:block}
+  table.qt .total{color:var(--cyan);font-weight:700}
+  .pending{color:var(--faint);font-style:italic;font-size:11px}
+
+  /* 右：邮件 + 工具 */
+  .email-list{padding:8px 10px;display:flex;flex-direction:column;gap:7px}
+  .email{background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:8px 10px;cursor:pointer;transition:.15s;border-left:3px solid var(--faint)}
+  .email:hover{border-color:var(--border2);background:var(--elev)}
+  .email.inquiry{border-left-color:var(--blue)}
+  .email.quote{border-left-color:var(--green)}
+  .email.nego{border-left-color:var(--amber)}
+  .email.review{border-left-color:var(--violet)}
+  .email.confirm{border-left-color:var(--cyan)}
+  .email .eh{display:flex;align-items:center;gap:7px;margin-bottom:3px}
+  .email .ic{font-size:13px}
+  .email .kj{font-size:10px;color:var(--dim);font-family:var(--mono);letter-spacing:.5px}
+  .email .sb{flex:1;font-size:11.5px;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .email .body{display:none;margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--dim);white-space:pre-wrap;word-break:break-word;line-height:1.6;font-family:var(--mono)}
+  .email.open .body{display:block}
+
+  .tools{display:flex;flex-direction:column;gap:7px;padding:10px}
+  .tool{background:var(--panel2);border:1px solid var(--border);border-left:3px solid var(--faint);border-radius:9px;padding:8px 10px;animation:fade .3s ease}
+  .tool.ok{border-left-color:var(--green)} .tool.reject{border-left-color:var(--amber)} .tool.err{border-left-color:var(--red)}
+  .tool .tn{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11.5px}
+  .tool .tn .nm{color:var(--cyan);font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tool .tn .pill{font-size:9.5px;padding:1px 7px;border-radius:10px;background:var(--elev);color:var(--faint);font-family:var(--mono)}
+  .tool.ok .pill{color:var(--green)} .tool.reject .pill{color:var(--amber)} .tool.err .pill{color:var(--red)}
+  .tool pre{margin:5px 0 0;color:var(--faint);white-space:pre-wrap;word-break:break-word;max-height:60px;overflow:auto;font-size:10.5px;font-family:var(--mono);line-height:1.5}
+
+  .empty{color:var(--faint);text-align:center;padding:20px;font-size:12px}
+  #toasts{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:60}
+  .toast{background:var(--elev);border:1px solid var(--border2);border-left:3px solid var(--cyan);padding:9px 13px;border-radius:9px;font-size:12px;box-shadow:var(--shadow);max-width:300px;animation:fade .25s ease}
+  .toast.warn{border-left-color:var(--amber)} .toast.bad{border-left-color:var(--red)} .toast.good{border-left-color:var(--green)}
+  #boot{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);z-index:100;text-align:center}
+  #boot .ring{width:42px;height:42px;border-radius:50%;border:2px solid var(--border);border-top-color:var(--cyan);animation:spin 1s linear infinite;margin:0 auto 13px}
+  #boot.err .ring{border-top-color:var(--red);animation:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<div id="boot"><div><div class="ring"></div><div id="boot-msg">正在连接询比价中台…</div></div></div>
+
+<header>
+  <div class="brand">
+    <div class="mark">运</div>
+    <div>
+      <h1>空运询比价 · 智能中台</h1>
+      <div class="sub">FREIGHT · 多货代询价 + AI 解析评估</div>
+    </div>
+  </div>
+  <div class="top-conn">
+    <span class="dot" id="conn-dot"></span>
+    <span id="conn-txt">连接中</span>
+    <button class="btn danger" id="btn-reset">重置数据</button>
+  </div>
+</header>
+
+<main>
+  <!-- 左：对话 -->
+  <div class="col">
+    <div class="card" style="flex:1;min-height:0">
+      <div class="threads" id="threads"></div>
+      <button class="btn new-chat" id="btn-new">+ 新建对话</button>
+      <div id="chat-log"></div>
+      <div class="quick">
+        <button data-q="我要发一批 PET 注坯模具到拉各斯(LOS, 尼日利亚)，500kg/6箱，CIF 条款，价格优先。请录入并发出询价。">录入询价</button>
+        <button data-q="收集各家货代的报价">收集报价</button>
+        <button data-q="用 AI 解析所有报价邮件，提取运费航司时效等">AI 解析</button>
+        <button data-q="按我的偏好评估最优报价">AI 评估</button>
+        <button data-q="通知销售管理审核推荐报价">通知审核</button>
+      </div>
+      <div class="chat-input">
+        <textarea id="msg" placeholder="输入询比价指令…（Enter 发送）"></textarea>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button class="send" id="btn-send">发送</button>
+          <button class="stop" id="btn-stop" style="display:none">停止</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 中：KPI + 推荐卡 + 报价对比 -->
+  <div class="col">
+    <div class="card"><div class="kbar" id="kbar"></div></div>
+    <div class="card" style="flex:1;min-height:0">
+      <div class="card-h"><span class="t">询价单</span><span class="n" id="inq-n">0</span></div>
+      <div class="chips" id="chips"></div>
+      <div class="card-body" id="center-body" style="overflow-y:auto">
+        <div class="empty">左侧录入询价后，这里展示 AI 推荐与各家报价对比</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右：邮件流水 + 工具 -->
+  <div class="col">
+    <div class="card" style="flex:1;min-height:0">
+      <div class="card-h"><span class="t">邮件流水</span><span class="n" id="mail-n">0</span></div>
+      <div class="card-body email-list" id="mail-list"><div class="empty">暂无邮件</div></div>
+    </div>
+    <div class="card" style="flex:1;min-height:0">
+      <div class="card-h"><span class="t">工具调用 · 追踪</span><span class="n" id="orch-n">0</span></div>
+      <div class="card-body tools" id="orch"><div class="empty">尚未调用工具</div></div>
+    </div>
+  </div>
+</main>
+
+<div id="toasts"></div>
+
+<script>
+"use strict";
+const API = "";
+const AGENT = "freight_inquiry";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c=="x"?r:(r&3|8)).toString(16)});
+
+const STATUS_LABEL = {draft:"草稿",sent:"已发询价",quoting:"报价中",evaluated:"已评估",decided:"已决策",confirmed:"已确认"};
+const PREF_LABEL = {price_first:"价格优先",time_first:"时效优先",balanced:"综合平衡",service_first:"服务优先"};
+const STYLE_LABEL = {fast:"急速型",cheap:"低价型",premium:"高端型",steady:"稳健型",regional:"区域专精"};
+const MAIL_LABEL = {inquiry_outbound:"询价",quote_inbound:"报价",negotiation_inbound:"议价",review_notice:"审核",confirm_notice:"确认"};
+const MAIL_ICON = {inquiry_outbound:"📤",quote_inbound:"📥",negotiation_inbound:"🤝",review_notice:"🔔",confirm_notice:"🎉"};
+const MAIL_CLS = {inquiry_outbound:"inquiry",quote_inbound:"quote",negotiation_inbound:"nego",review_notice:"review",confirm_notice:"confirm"};
+
+const S = {
+  token:null, userId:null, world:null, selectedInquiryId:null,
+  threadId:null, threads:[], busy:false, abort:null, toolCount:0,
+};
+
+/* ---------- 对话线程持久化 ---------- */
+const UID_KEY = "freight.uid";
+const threadsKey = (u) => "freight.threads." + u;
+const ACTIVE_KEY = "freight.active";
+function loadThreads(){ try{ S.threads = JSON.parse(localStorage.getItem(threadsKey(S.userId))||"[]"); }catch{ S.threads=[]; } if(!Array.isArray(S.threads)) S.threads=[]; }
+function saveThreads(){ try{ localStorage.setItem(threadsKey(S.userId), JSON.stringify(S.threads)); }catch{} }
+function activeThread(){ return S.threads.find(t=>t.id===S.threadId); }
+function ensureThread(){ if(!S.threads.length){ const t=newThread(false); S.threadId=t.id; } else if(!activeThread()){ S.threadId=S.threads[0].id; } try{ localStorage.setItem(ACTIVE_KEY,S.threadId); }catch{} }
+function newThread(persist=true){
+  const t={id:uuid(),title:"新对话",messages:[],createdAt:Date.now()};
+  S.threads.unshift(t); S.threadId=t.id;
+  if(persist){ saveThreads(); try{localStorage.setItem(ACTIVE_KEY,S.threadId);}catch{} renderThreadList(); renderChat(); }
+  return t;
+}
+function switchThread(id){ if(S.busy)return; S.threadId=id; try{localStorage.setItem(ACTIVE_KEY,id);}catch{} renderThreadList(); renderChat(); }
+function deleteThread(id,e){ e.stopPropagation(); S.threads=S.threads.filter(t=>t.id!==id); if(S.threadId===id) S.threadId=S.threads[0]?.id??null; if(!S.threads.length){ newThread(); } else { saveThreads(); try{localStorage.setItem(ACTIVE_KEY,S.threadId);}catch{} renderThreadList(); renderChat(); } }
+function pushMsg(role,content){ const t=activeThread(); if(!t)return; t.messages.push({role,content}); if(role==="user"&&t.title==="新对话") t.title=content.slice(0,22); saveThreads(); }
+
+/* ---------- 启动 ---------- */
+async function boot(){
+  try{
+    let uid=null; try{ uid=localStorage.getItem(UID_KEY); }catch{}
+    const r = await fetch(API+"/inquiry/api/dev-login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(uid?{userId:uid}:{})});
+    if(!r.ok) throw new Error("dev-login 失败 "+r.status);
+    const j = await r.json();
+    S.token=j.token; S.userId=j.userId;
+    try{ localStorage.setItem(UID_KEY,S.userId); }catch{}
+    loadThreads();
+    const last = (()=>{try{return localStorage.getItem(ACTIVE_KEY);}catch{return null;}})();
+    if(last && S.threads.find(t=>t.id===last)) S.threadId=last;
+    ensureThread();
+    openStream();
+    $("boot").style.display="none";
+    $("conn-dot").className="dot ok"; $("conn-txt").textContent="已连接 · "+S.userId;
+    renderThreadList(); renderChat();
+    if(activeThread() && activeThread().messages.length===0) addMsg("sys",null,"已连入询比价中台。点击左下快捷按钮可一键跑通「录入→分发→报价→解析→评估→审核」全流程，也可自然语言指令。");
+  }catch(e){
+    $("boot").classList.add("err");
+    $("boot-msg").innerHTML = "连接失败：<br><b>"+esc(e.message)+"</b><br><br><span style='color:var(--faint)'>请确认平台已启动（npm run dev，端口 9876）</span>";
+  }
+}
+function auth(){ return { Authorization:"Bearer "+S.token, "Content-Type":"application/json" }; }
+let streamClosed=false;
+function openStream(){
+  streamClosed=false;
+  const connect=()=>{
+    fetch(API+"/inquiry/api/stream",{headers:auth()}).then(resp=>{
+      if(!resp.body){ reconnect(); return; }
+      const rd=resp.body.getReader(),dec=new TextDecoder();let buf="";
+      const pump=async()=>{
+        try{
+          while(true){
+            const {value,done}=await rd.read(); if(done)break;
+            buf+=dec.decode(value,{stream:true});
+            let i; while((i=buf.indexOf("\n\n"))!==-1){ const blk=buf.slice(0,i); buf=buf.slice(i+2); const dl=[]; for(const ln of blk.split("\n")){ if(ln.startsWith("data:")) dl.push(ln.slice(5).replace(/^ /,"")); } if(!dl.length)continue; try{ const ev=JSON.parse(dl.join("\n")); applyUpdate(ev); }catch{} }
+          }
+        }catch{}
+        reconnect();
+      };
+      pump();
+    }).catch(()=>reconnect());
+  };
+  const reconnect=()=>{
+    if(streamClosed) return;
+    $("conn-dot").className="dot"; $("conn-txt").textContent="重连中…";
+    setTimeout(()=>{ if(!streamClosed) connect(); }, 1800);
+  };
+  connect();
+}
+
+/* ---------- SSE 更新 ---------- */
+function applyUpdate(ev){
+  if(!ev) return;
+  if(ev.type === "world" && ev.world){
+    const prevIds = new Set((S.world?.inquiries||[]).map(i=>i.id));
+    S.world = ev.world;
+    // 自动选中：若当前选中不在列表，选最新一条
+    const ids = new Set(S.world.inquiries.map(i=>i.id));
+    if(S.selectedInquiryId && !ids.has(S.selectedInquiryId)) S.selectedInquiryId = null;
+    if(!S.selectedInquiryId && S.world.inquiries.length){
+      // 新增的优先选中
+      const fresh = S.world.inquiries.find(i=>!prevIds.has(i.id));
+      S.selectedInquiryId = (fresh||S.world.inquiries[0]).id;
+    }
+    renderAll();
+    if(ev.summary) toast(ev.summary, /失败|错误/.test(ev.summary)?"warn":"info");
+  } else if(ev.type === "reset"){
+    S.world = ev.world; S.selectedInquiryId = null; renderAll();
+  }
+}
+
+/* ---------- 渲染 ---------- */
+function renderAll(){ renderKPI(); renderChips(); renderCenter(); renderEmails(); }
+
+function renderKPI(){
+  const w = S.world; if(!w){ $("kbar").innerHTML=""; return; }
+  const inq = w.inquiries.length;
+  const quo = w.emails.filter(e=>e.kind==="quote_inbound").length;
+  const eva = Object.keys(w.evaluations).length;
+  const con = w.inquiries.filter(i=>i.status==="confirmed").length;
+  $("kbar").innerHTML =
+    kpi("inq","询价单",inq)+kpi("quo","报价邮件",quo)+kpi("eva","已评估",eva)+kpi("con","已确认",con);
+}
+function kpi(cls,label,val){ return `<div class="k ${cls}"><span class="kl">${label}</span><span class="kv">${val}</span></div>`; }
+
+function renderChips(){
+  const w = S.world; const box=$("chips");
+  $("inq-n").textContent = w? w.inquiries.length : 0;
+  if(!w || !w.inquiries.length){ box.innerHTML='<span class="empty" style="padding:4px 0">暂无询价单</span>'; return; }
+  box.innerHTML = w.inquiries.map(i=>{
+    const active = i.id===S.selectedInquiryId;
+    return `<div class="chip ${active?'active':''}" data-id="${esc(i.id)}">${esc(i.cargo.name)} → ${esc(i.cargo.destCode)}<span class="st">${STATUS_LABEL[i.status]||i.status}</span></div>`;
+  }).join("");
+  box.querySelectorAll(".chip").forEach(el=>{ el.onclick=()=>{ S.selectedInquiryId=el.dataset.id; renderAll(); }; });
+}
+
+function curInquiry(){ return S.world?.inquiries.find(i=>i.id===S.selectedInquiryId); }
+
+function renderCenter(){
+  const body=$("center-body");
+  const iq = curInquiry();
+  if(!iq){ body.innerHTML='<div class="empty">左侧录入询价后，这里展示 AI 推荐与各家报价对比</div>'; return; }
+  const ev = S.world.evaluations[iq.id];
+  const quotes = S.world.emails.filter(e=>e.inquiryId===iq.id && e.kind==="quote_inbound");
+  body.innerHTML = renderRecom(ev, iq) + renderQuotesTable(quotes, ev);
+}
+function renderRecom(ev, iq){
+  if(!ev) return `<div class="recom empty"><div class="empty">尚未 AI 评估。报价收集后调用「AI 评估」即可生成推荐。</div></div>`;
+  const rankHTML = (ev.ranking||[]).map((r,i)=>`<div class="rank-row ${i===0?'top':''}"><span class="pos">${i+1}</span><span class="nm">${esc(r.forwarderName||r.forwarderId)}</span><span class="sc">${r.score}</span><span class="pc">${esc(r.pros)}</span></div>`).join("");
+  return `<div class="recom">
+    <div class="rh"><span class="tag">★ AI 推荐</span><span class="pref">${PREF_LABEL[ev.preferenceUsed]||ev.preferenceUsed}</span></div>
+    <div class="pick">${esc(ev.recommendedForwarderName||ev.recommendedForwarderId)}</div>
+    <div class="reason">${esc(ev.reason)}</div>
+    <div class="rank">${rankHTML}</div>
+  </div>`;
+}
+function renderQuotesTable(quotes, ev){
+  if(!quotes.length) return `<div class="qt-wrap"><div class="empty">尚无报价邮件（先「收集报价」）</div></div>`;
+  const fwdMap = {}; (S.world.forwarders||[]).forEach(f=>fwdMap[f.id]=f);
+  const recId = ev?.recommendedForwarderId;
+  const rows = quotes.map(q=>{
+    const truth = q.truthQuote||{};
+    const p = q.parsedQuote;
+    const fid = truth.forwarderId||p?.forwarderId||'?';
+    const fwd = fwdMap[fid]||{};
+    const nm = truth.forwarderName||p?.forwarderName||fid;
+    const isRec = fid===recId;
+    if(!p){
+      return `<tr class="${isRec?'rec':''}"><td class="nm-cell">${esc(nm)}<span class="sty">${STYLE_LABEL[fwd.style]||''} · ★${fwd.rating||'-'}</span></td>
+        <td colspan="5" class="pending">未解析（调用「AI 解析」）</td></tr>`;
+    }
+    const sc = p.surcharges||{};
+    const warLine = sc.war?` +战¥${sc.war}`:'';
+    return `<tr class="${isRec?'rec':''}">
+      <td class="nm-cell">${esc(nm)}<span class="sty">${STYLE_LABEL[fwd.style]||''} · ★${fwd.rating||'-'}</span></td>
+      <td class="num total">¥${p.freightTotal}</td>
+      <td class="num">¥${p.unitPrice}/kg<br><span style="font-size:10px;color:var(--faint)">油¥${sc.fuel||0} 安¥${sc.security||0}${warLine}</span></td>
+      <td class="num">${p.transitDays}天</td>
+      <td>${esc(p.airline)}</td>
+      <td class="num" style="font-size:11px">${esc(p.validity)}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="qt-wrap"><table class="qt"><thead><tr><th>货代</th><th class="num">总价</th><th class="num">单价/附加</th><th class="num">时效</th><th>航司</th><th class="num">有效期</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function renderEmails(){
+  const box=$("mail-list");
+  const w=S.world;
+  const iq = curInquiry();
+  const mails = iq ? w.emails.filter(e=>e.inquiryId===iq.id) : [];
+  $("mail-n").textContent = mails.length;
+  if(!mails.length){ box.innerHTML='<div class="empty">'+(iq?'暂无邮件':'先选择询价单')+'</div>'; return; }
+  // 按时间倒序
+  mails.sort((a,b)=>(b.receivedAt||'').localeCompare(a.receivedAt||''));
+  box.innerHTML = mails.map(m=>{
+    const cls = MAIL_CLS[m.kind]||'';
+    const parsedTag = (m.kind==='quote_inbound'||m.kind==='negotiation_inbound') && m.parsedQuote ? `<span style="color:var(--green);font-size:10px">·已解析</span>`:'';
+    return `<div class="email ${cls}" data-id="${esc(m.id)}">
+      <div class="eh"><span class="ic">${MAIL_ICON[m.kind]||'✉'}</span><span class="kj">${MAIL_LABEL[m.kind]||m.kind}${parsedTag}</span><span class="sb">${esc(m.subject)}</span></div>
+      <div class="body">${esc(m.body)}</div>
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".email").forEach(el=>{ el.onclick=()=>{ el.classList.toggle("open"); }; });
+}
+
+/* ---------- 对话 ---------- */
+function renderThreadList(){
+  $("threads").innerHTML=S.threads.map(t=>`<div class="thread ${t.id===S.threadId?'active':''}" data-id="${t.id}"><span class="tt">${esc(t.title||"新对话")}</span><span class="tx" data-id="${t.id}">×</span></div>`).join("");
+  $("threads").querySelectorAll(".thread").forEach(el=>{ el.onclick=()=>switchThread(el.dataset.id); });
+  $("threads").querySelectorAll(".tx").forEach(el=>{ el.onclick=(e)=>deleteThread(el.dataset.id,e); });
+}
+function renderChat(){
+  const t=activeThread(); const log=$("chat-log"); log.innerHTML="";
+  if(!t) return;
+  for(const m of t.messages){ if(m.role==="user") addMsg("user",m.content); else if(m.role==="assistant") addMsg("ai",m.content,"询比价助手"); else addMsg(m.role,m.content); }
+}
+function renderMd(src){
+  if(src==null) return '';
+  const lines = String(src).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])).split('\n');
+  let html='',i=0,inList=null,table=null;
+  const flushList=()=>{ if(inList){html+=`</${inList}>`;inList=null;} };
+  const flushTable=()=>{ if(table){ html+='<table class="md"><thead><tr>'+table.head.map(h=>`<th>${h}</th>`).join('')+'</tr></thead><tbody>'+table.rows.map(r=>'<tr>'+r.map(c=>`<td>${c}</td>`).join('')+'</tr>').join('')+'</tbody></table>'; table=null; } };
+  const inline=t=>t.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/`([^`]+)`/g,'<code>$1</code>');
+  for(;i<lines.length;i++){
+    const line=lines[i].trim();
+    if(line.startsWith('```')){ flushList();flushTable(); let c='';i++; while(i<lines.length && !lines[i].trim().startsWith('```')){c+=lines[i]+'\n';i++;} html+=`<pre class="md-code"><code>${c.replace(/\n$/,'')}</code></pre>`; continue; }
+    if(line.includes('|') && (line.match(/\|/g)||[]).length>=2){
+      const parts=line.replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+      if(parts.every(c=>c===''||/^:?-+:?$/.test(c))){ if(table) table.sep=true; continue; }
+      if(!table){ flushList(); table={head:parts,rows:[],sep:false}; }
+      else if(!table.sep){ table.head=parts; }
+      else { table.rows.push(parts); }
+      continue;
+    }
+    flushTable();
+    let m;
+    if(m=line.match(/^(#{1,6})\s+(.*)$/)){ flushList(); html+=`<h${m[1].length} class="md-h">${inline(m[2])}</h${m[1].length}>`; continue; }
+    if(/^(---|\*\*\*|___)\s*$/.test(line)){ flushList(); html+='<hr class="md-hr"/>'; continue; }
+    if(m=line.match(/^[-*+]\s+(.*)$/)){ if(inList!=='ul'){flushList();html+='<ul class="md-ul">';inList='ul';} html+=`<li>${inline(m[1])}</li>`; continue; }
+    if(m=line.match(/^\d+\.\s+(.*)$/)){ if(inList!=='ol'){flushList();html+='<ol class="md-ol">';inList='ol';} html+=`<li>${inline(m[1])}</li>`; continue; }
+    if(line===''){ flushList(); continue; }
+    flushList(); html+=`<p class="md-p">${inline(line)}</p>`;
+  }
+  flushList(); flushTable();
+  return html;
+}
+function addMsg(cls,text,who){
+  const log=$("chat-log"); const d=document.createElement("div"); d.className="msg "+cls;
+  if(text==null&&cls==="sys"){ d.textContent=""; }
+  else if(cls==="ai"){ d.innerHTML=(who?`<div class="who">${who}</div>`:'')+'<div class="md-body">'+renderMd(text)+'</div>'; }
+  else { d.textContent=text; }
+  log.appendChild(d); log.scrollTop=log.scrollHeight; return d;
+}
+function scrollChat(){ $("chat-log").scrollTop=$("chat-log").scrollHeight; }
+
+async function sendMessage(text){
+  text=(text??$("msg").value).trim(); if(!text||S.busy)return;
+  $("msg").value=""; pushMsg("user",text); addMsg("user",text);
+  setBusy(true); clearOrch(); S.abort=new AbortController();
+  const t=activeThread();
+  const messages=t.messages.map(m=>({id:uuid(),role:m.role,content:m.content}));
+  const body={threadId:t.id,runId:uuid(),state:{},messages,tools:[],context:[]};
+  let bubble=null,buf="";
+  try{
+    const resp=await fetch(API+`/agent/${AGENT}/run`,{method:"POST",headers:auth(),body:JSON.stringify(body),signal:S.abort.signal});
+    if(!resp.ok||!resp.body){ const tx=await resp.text().catch(()=>""); addMsg("sys","run 失败 "+resp.status+" "+tx); setBusy(false); return; }
+    await streamSSE(resp.body,(ev)=>handleAGUI(ev,b=>{ if(!bubble){bubble=addMsg("ai","","询比价助手");} buf+=b; const body=bubble.querySelector('.md-body'); if(body) body.textContent=buf; scrollChat(); }));
+    if(buf){ pushMsg("assistant",buf); const body=bubble?.querySelector('.md-body'); if(body) body.innerHTML=renderMd(buf); }
+  }catch(e){ if(e.name==="AbortError") addMsg("sys","（已停止）"); else addMsg("sys","流错误: "+e.message); }
+  setBusy(false);
+}
+function handleAGUI(ev,onText){
+  const t=ev.type;
+  if(t==="TEXT_MESSAGE_CONTENT") onText(ev.delta||"");
+  else if(t==="TOOL_CALL_START") orchStart(ev.toolCallId,ev.toolCallName);
+  else if(t==="TOOL_CALL_ARGS") orchArgs(ev.toolCallId,ev.delta||"");
+  else if(t==="TOOL_CALL_END"){}
+  else if(t==="TOOL_CALL_RESULT") orchResult(ev.toolCallId,ev.content);
+  else if(t==="RUN_ERROR") addMsg("sys","运行错误: "+(ev.message||ev.error||""));
+}
+
+/* ---------- 工具调用面板 ---------- */
+const orch=new Map();
+function clearOrch(){ orch.clear(); S.toolCount=0; $("orch").innerHTML='<div class="empty">正在调用工具…</div>'; $("orch-n").textContent="0"; }
+function orchStart(id,name){ let o=orch.get(id); if(!o){o={name,args:"",result:null};orch.set(id,o);} o.name=name||o.name; S.toolCount++; $("orch-n").textContent=String(S.toolCount); renderOrch(id,o); }
+function orchArgs(id,delta){ const o=orch.get(id); if(!o)return; o.args+=delta; renderOrch(id,o); }
+function orchResult(id,content){ const o=orch.get(id); if(!o)return; o.result=content; renderOrch(id,o); }
+function resultText(c){ if(c==null)return""; if(typeof c==="string")return c; if(Array.isArray(c))return c.map(p=>p?.text??"").join(""); try{return JSON.stringify(c);}catch{return String(c);} }
+function classifyResult(c){ let s=resultText(c).trim(); let obj=null; try{obj=JSON.parse(s);}catch{} if(obj&&typeof obj==="object"){ if(obj.ok===false&&obj.error===true)return"err"; if(obj.ok===false)return"reject"; } return"ok"; }
+function renderOrch(id,o){
+  const list=$("orch"); if(list.querySelector(".empty")) list.innerHTML="";
+  let el=document.getElementById("orch-"+id);
+  if(!el){ el=document.createElement("div"); el.className="tool"; el.id="orch-"+id; list.appendChild(el); }
+  let cls="ok",pill="结果",snippet="";
+  if(o.result!=null){ cls=classifyResult(o.result); pill=cls==="err"?"错误":(cls==="reject"?"拒绝":"完成"); snippet=resultText(o.result).slice(0,300); }
+  else { cls=""; pill="调用中"; }
+  el.className="tool "+cls;
+  el.innerHTML=`<div class="tn"><span class="nm">${esc(o.name)}</span><span class="pill">${pill}</span></div>${o.args?`<pre>${esc(o.args)}</pre>`:""}${snippet?`<pre>${esc(snippet)}</pre>`:""}`;
+  list.scrollTop=list.scrollHeight;
+}
+function setBusy(b){ S.busy=b; $("btn-send").style.display=b?"none":"block"; $("btn-stop").style.display=b?"block":"none"; $("btn-send").disabled=b; }
+async function stopRun(){ try{ await fetch(API+`/agent/${AGENT}/stop/${S.threadId}`,{method:"POST",headers:auth()}); }catch{} if(S.abort)S.abort.abort(); }
+async function streamSSE(body,onEvent){ const rd=body.getReader(),dec=new TextDecoder();let buf=""; while(true){ const {value,done}=await rd.read(); if(done)break; buf+=dec.decode(value,{stream:true}); let i; while((i=buf.indexOf("\n\n"))!==-1){ const blk=buf.slice(0,i); buf=buf.slice(i+2); parseSSE(blk,onEvent); } } if(buf.trim()) parseSSE(buf,onEvent); }
+function parseSSE(blk,onEvent){ const dl=[]; for(const ln of blk.split("\n")){ if(ln.startsWith("data:")) dl.push(ln.slice(5).replace(/^ /,"")); } if(!dl.length)return; const pl=dl.join("\n"); if(pl==="[DONE]")return; try{onEvent(JSON.parse(pl));}catch{} }
+
+/* ---------- 反馈 ---------- */
+function toast(msg,type){ if(!msg)return; const t=$("toasts"); const e=document.createElement("div"); e.className="toast "+(type||""); e.textContent=msg; t.appendChild(e); setTimeout(()=>{e.style.opacity="0";e.style.transition="opacity .4s";setTimeout(()=>e.remove(),400);},3000); }
+
+/* ---------- 事件绑定 ---------- */
+$("btn-send").onclick=()=>sendMessage();
+$("btn-stop").onclick=stopRun;
+$("msg").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendMessage(); }});
+document.querySelectorAll(".quick button").forEach(b=>b.onclick=()=>sendMessage(b.dataset.q));
+$("btn-new").onclick=()=>newThread();
+$("btn-reset").onclick=async()=>{ if(!confirm("重置所有询比价数据？此操作不可撤销。"))return; try{ await fetch(API+"/inquiry/api/reset",{method:"POST",headers:auth()}); toast("已重置","info"); }catch(e){ toast("重置失败: "+e.message,"bad"); } };
+boot();
+</script>
+</body>
+</html>
