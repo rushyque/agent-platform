@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "go": "node scripts/go.mjs",
+    "go:prod": "node scripts/go.mjs prod",
+    "console:install": "npm --prefix console install",
+    "console:build": "npm --prefix console run build",
+    "console:dev": "npm --prefix console run dev"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.115",
