@@ -5,6 +5,8 @@ import {
   rollupThreadSummary,
   DEFAULT_POLICY,
 } from "../context/index.js";
+import { observeBus } from "../../observe/bus.js";
+import { logger } from "../../observe/logger.js";
 
 // 审计 + token 计费 + 线程滚动摘要钩子。
 // onStepFinish 记每步；onFinish 记总览（agent_runs，DB 挂降级）并把本次对话压进 thread_summary，
@@ -41,20 +43,35 @@ function buildRunText(steps: any[], messages?: any[]): string {
 export function createRunHooks(params: RunHooksParams) {
   const { agentId, userId, threadId, runId, messages } = params;
   const startedAt = Date.now();
+  let stepIndex = -1;
 
   return {
     onStepFinish: ({ text, toolCalls, toolResults, usage, finishReason }: any) => {
+      stepIndex++;
       const elapsed = Date.now() - startedAt;
-      const toolSummary =
+      const tools =
         toolCalls && toolCalls.length > 0
-          ? toolCalls.map((tc: any) => tc.toolName).join(",")
-          : "none";
-      const tokens = usage
-        ? `prompt=${usage.promptTokens ?? 0} completion=${usage.completionTokens ?? 0}`
-        : "n/a";
-      console.log(
-        `[Audit] agent=${agentId} thread=${threadId} step@+${elapsed}ms: finishReason=${finishReason} tools=[${toolSummary}] tokens(${tokens}) textLen=${text?.length ?? 0}`
-      );
+          ? toolCalls.map((tc: any) => tc.toolName)
+          : [];
+      observeBus.emit("runs", "run.llm_response", {
+        runId,
+        threadId,
+        agentId,
+        rawText: typeof text === "string" ? text : "",
+        usage: usage
+          ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }
+          : null,
+        finishReason,
+        stepIndex,
+      });
+      logger.for("Audit").info("step", {
+        agent: agentId,
+        thread: threadId,
+        elapsedMs: elapsed,
+        finishReason,
+        tools,
+        textLen: text?.length ?? 0,
+      });
     },
 
     onFinish: async ({ steps, usage, finishReason }: any) => {
@@ -62,9 +79,22 @@ export function createRunHooks(params: RunHooksParams) {
       const promptTokens = usage?.promptTokens ?? null;
       const completionTokens = usage?.completionTokens ?? null;
       const totalMs = Date.now() - startedAt;
-      console.log(
-        `[Audit] agent=${agentId} thread=${threadId} run DONE in ${totalMs}ms: steps=${stepCount} finishReason=${finishReason} prompt=${promptTokens ?? "n/a"} completion=${completionTokens ?? "n/a"}`
-      );
+      observeBus.emit("runs", "run.finished", {
+        runId,
+        threadId,
+        agentId,
+        status: finishReason === "error" ? "error" : "ok",
+        durationMs: totalMs,
+      });
+      logger.for("Audit").info("run done", {
+        agent: agentId,
+        thread: threadId,
+        durationMs: totalMs,
+        steps: stepCount,
+        finishReason,
+        prompt: promptTokens ?? "n/a",
+        completion: completionTokens ?? "n/a",
+      });
 
       // 线程滚动摘要：上次摘要 + 本次对话 → 新单段，覆写存内存，下次 run 注入 system
       try {
@@ -73,12 +103,14 @@ export function createRunHooks(params: RunHooksParams) {
           const prev = getThreadSummary(threadId);
           const rolled = await rollupThreadSummary(prev, runText, DEFAULT_POLICY);
           setThreadSummary(threadId, rolled);
-          console.log(
-            `[thread-memory] ${threadId} summary rolled: ${rolled.length}chars (prev ${prev?.length ?? 0})`
-          );
+          logger.for("thread-memory").info("summary rolled", {
+            thread: threadId,
+            chars: rolled.length,
+            prevChars: prev?.length ?? 0,
+          });
         }
       } catch (err) {
-        console.error(`[thread-memory] rollup failed:`, (err as Error).message);
+        logger.for("thread-memory").error("rollup failed", { err: (err as Error).message });
       }
 
       try {
@@ -93,7 +125,7 @@ export function createRunHooks(params: RunHooksParams) {
           status: finishReason === "error" ? "error" : "success",
         });
       } catch (err) {
-        console.error(`[Audit] recordRun failed:`, (err as Error).message);
+        logger.for("Audit").error("recordRun failed", { err: (err as Error).message });
       }
     },
   };

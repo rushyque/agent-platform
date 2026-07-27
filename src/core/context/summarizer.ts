@@ -3,6 +3,9 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { settings } from "../../config/settings.js";
 import type { CompactionPolicy } from "./policy.js";
 import { entryToText } from "./folder.js";
+import { logger } from "../../observe/logger.js";
+
+const log = logger.for("summarize");
 
 // 摘要底层：把任意文本压成单段事实摘要。覆写式（输出恒为一段，不累积）。
 // 用纯净 model（不挂压缩 middleware），避免 transformParams 递归。带 hash 缓存：相同输入复用结果。
@@ -33,7 +36,7 @@ async function summarizeText(text: string, policy: CompactionPolicy): Promise<st
   const key = hash(text);
   const hit = summaryCache.get(key);
   if (hit) {
-    console.log(`[summarize] cache hit out=${hit.length}chars`);
+    log.info("cache hit", { outChars: hit.length });
     return hit;
   }
 
@@ -49,9 +52,9 @@ async function summarizeText(text: string, policy: CompactionPolicy): Promise<st
       prompt: `压缩到约 ${policy.summaryBudgetChars} 字以内：\n\n` + text.slice(0, 8000),
     });
     summary = out.trim().slice(0, policy.summaryBudgetChars);
-    console.log(`[summarize] ${text.length}→${summary.length} chars ${Date.now() - t0}ms`);
+    log.info("summarized", { inChars: text.length, outChars: summary.length, ms: Date.now() - t0 });
   } catch (err) {
-    console.error("[summarize] failed, fallback to truncation:", (err as Error).message);
+    log.error("failed, fallback to truncation", { err: (err as Error).message });
     summary = text.slice(0, policy.summaryBudgetChars);
   }
 

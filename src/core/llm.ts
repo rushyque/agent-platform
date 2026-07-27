@@ -2,6 +2,7 @@ import { wrapLanguageModel, type LanguageModel } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { settings } from "../config/settings.js";
 import { compactionMiddleware } from "./context/compactor.js";
+import { logger } from "../observe/logger.js";
 
 // DeepSeek Reasoning 中间件
 // 从 DeepSeek 的 raw chunk 中提取 reasoning_content 字段，
@@ -33,7 +34,7 @@ export const deepseekReasoningMiddleware = {
         if (lastTs > 0) {
           const gap = now - lastTs;
           if (gap > 500) {
-            console.log(`[stall] ${gap}ms gap in stream (after ${lastType} → ${chunk.type})`);
+            logger.for("stall").info("stream gap", { gap, after: lastType, before: chunk.type });
           }
         }
         lastTs = now;

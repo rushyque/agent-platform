@@ -11,6 +11,7 @@ import {
   PREFERENCE_HINT,
 } from './types.js';
 import type { ParsedQuote, Evaluation, Preference, QuoteEmail, Forwarder, CargoInquiry, Surcharges } from './types.js';
+import { logger } from '../../observe/logger.js';
 
 let rawModelCache: any = null;
 function getRawModel(): any {
@@ -100,7 +101,7 @@ export async function parseQuoteEmailsWithLLM(
     };
   } catch (err) {
     const msg = (err as Error).message;
-    console.error('[parseQuoteEmails] generateObject failed:', msg);
+    logger.for('parseQuoteEmails').error('generateObject failed', { err: msg });
     return {
       parsed: [],
       trace: [{ artifact: `generateObject 失败：${msg.slice(0, 200)}`, outcome: 'gen_error' }],
@@ -184,7 +185,7 @@ export async function evaluateQuotesWithLLM(
     };
   } catch (err) {
     const msg = (err as Error).message;
-    console.error('[evaluateQuotes] generateObject failed:', msg);
+    logger.for('evaluateQuotes').error('generateObject failed', { err: msg });
     return {
       evaluation: null,
       trace: [{ artifact: `generateObject 失败：${msg.slice(0, 200)}`, outcome: 'gen_error' }],

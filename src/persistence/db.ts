@@ -1,5 +1,8 @@
 import sql, { type IConnectionPool } from "mssql";
 import { settings } from "../config/settings.js";
+import { logger } from "../observe/logger.js";
+
+const log = logger.for("DB");
 
 // MSSQL 连接池 —— 仅供未来的业务数据查询工具（如 NL2SQL）使用。
 // 中台自身状态（事件/线程/审计/工具结果/线程摘要）已全面内存化，不再依赖此连接。
@@ -26,11 +29,11 @@ export function getPool(): Promise<IConnectionPool> {
     poolPromise.then(
       (pool) => {
         (pool as unknown as NodeJS.EventEmitter).on("error", (err: Error) => {
-          console.error("[DB] Pool error event:", err.message);
+          log.error("Pool error event", { err: err.message });
         });
       },
       (err: Error) => {
-        console.error("[DB] Connection pool failed:", err.message);
+        log.error("Connection pool failed", { err: err.message });
         poolPromise = null;
       }
     );

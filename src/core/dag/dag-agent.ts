@@ -9,6 +9,7 @@ import type {
   AgentContext,
 } from "../../types/agent-config.js";
 import { executeDAG } from "./dag-executor.js";
+import { observeBus } from "../../observe/bus.js";
 
 export interface DAGAgentConfig {
   agentId: string;
@@ -45,7 +46,14 @@ export class DAGAgent extends AbstractAgent {
       const emit = (event: BaseEvent) => subscriber.next(event);
 
       const run = async () => {
+        const startedAt = Date.now();
         try { this.onRunStartFn?.(input); } catch { /* 调试钩子，永不阻断 */ }
+        observeBus.emit("runs", "run.started", {
+          runId: input.runId,
+          threadId: input.threadId,
+          agentId: this.agentId ?? "",
+          route: "dag",
+        });
         emit({
           type: EventType.RUN_STARTED,
           threadId: input.threadId,
@@ -56,6 +64,7 @@ export class DAGAgent extends AbstractAgent {
         await executeDAG(this.dagDefinition, {
           threadId: input.threadId,
           runId: input.runId,
+          agentId: this.agentId ?? "",
           messages: input.messages,
           context: this.context,
           tools: this.tools,
@@ -64,15 +73,31 @@ export class DAGAgent extends AbstractAgent {
           abortSignal: (input as any).abortSignal,
         });
 
+        observeBus.emit("runs", "run.finished", {
+          runId: input.runId,
+          threadId: input.threadId,
+          agentId: this.agentId ?? "",
+          status: "ok",
+          durationMs: Date.now() - startedAt,
+        });
         emit({ type: EventType.RUN_FINISHED, threadId: input.threadId, runId: input.runId } as any);
         subscriber.complete();
       };
 
       run().catch((err) => {
         // executeDAG 已发射 RUN_ERROR；此处兜底确保有终止事件并 complete
+        const message = err instanceof Error ? err.message : String(err);
+        observeBus.emit("runs", "run.finished", {
+          runId: input.runId,
+          threadId: input.threadId,
+          agentId: this.agentId ?? "",
+          status: "error",
+          durationMs: 0,
+          message,
+        });
         emit({
           type: EventType.RUN_ERROR,
-          message: err instanceof Error ? err.message : String(err),
+          message,
           code: "DAG_FATAL",
         } as any);
         subscriber.complete();

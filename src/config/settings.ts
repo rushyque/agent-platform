@@ -13,6 +13,15 @@ const envSchema = z.object({
   DB_PASSWORD: z.string(),
   DB_NAME: z.string(),
   JWT_SECRET: z.string(),
+  // 观察控制台：默认开启；设 OBSERVE_ENABLED=false 关闭。
+  // 注意 env 永远是字符串，"false" 经 coerce.boolean() 会变 true，故用字符串比较。
+  OBSERVE_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v !== "false")
+    .default("true"),
+  // 可选 admin token；配置后 /observe/stream 与 /console/api/* 需带 ?token= 或 Authorization。
+  OBSERVE_TOKEN: z.string().optional(),
 });
 
 export const settings = envSchema.parse(process.env);

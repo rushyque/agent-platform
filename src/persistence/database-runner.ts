@@ -12,6 +12,9 @@ import { EventType, compactEvents, type Message } from "@ag-ui/client";
 import type { BaseEvent } from "@ag-ui/core";
 import { appendEvents, getEvents } from "./event-store.js";
 import { upsertThread, listThreads, type ThreadRecord } from "./thread-store.js";
+import { logger } from "../observe/logger.js";
+
+const log = logger.for("DatabaseAgentRunner");
 
 // 每个线程的活跃状态（内存，用于并发 connect 转发 + stop）
 interface ActiveState {
@@ -85,7 +88,7 @@ export class DatabaseAgentRunner extends AgentRunner {
           }
         }
       } catch (err) {
-        console.error(`[DatabaseAgentRunner] load history failed for ${request.threadId}:`, (err as Error).message);
+        log.error("load history failed", { threadId: request.threadId, err: (err as Error).message });
       }
 
       let lastDeltaTs = 0;
@@ -108,7 +111,7 @@ export class DatabaseAgentRunner extends AgentRunner {
               lastDeltaTs = now;
             }
             if (event.type === EventType.RUN_FINISHED) {
-              console.log(`[sse-gaps] thread=${request.threadId} deltas=${deltaCount} maxGap=${maxGap}ms over100=${gapsOver100} over200=${gapsOver200}`);
+              logger.for("sse-gaps").info("run deltas", { thread: request.threadId, deltas: deltaCount, maxGap, over100: gapsOver100, over200: gapsOver200 });
             }
             let processed: BaseEvent = event;
             if (event.type === EventType.RUN_STARTED) {
@@ -156,7 +159,7 @@ export class DatabaseAgentRunner extends AgentRunner {
             await this.persist(request, currentRunEvents);
           }
         } catch (persistErr) {
-          console.error(`[DatabaseAgentRunner] persist (error path) failed:`, (persistErr as Error).message);
+          log.error("persist (error path) failed", { err: (persistErr as Error).message });
         }
       } finally {
         if (state.currentRunId === request.input.runId) {
@@ -210,7 +213,7 @@ export class DatabaseAgentRunner extends AgentRunner {
         try {
           historyEvents = await getEvents(request.threadId);
         } catch (err) {
-          console.error(`[DatabaseAgentRunner] connect load failed:`, (err as Error).message);
+          log.error("connect load failed", { threadId: request.threadId, err: (err as Error).message });
         }
         const compacted = compactEvents(historyEvents);
         const emittedMessageIds = new Set<string>();
@@ -270,7 +273,7 @@ export class DatabaseAgentRunner extends AgentRunner {
       agent.abortRun();
       return true;
     } catch (error) {
-      console.error(`[DatabaseAgentRunner] abort failed:`, (error as Error).message);
+      log.error("abort failed", { err: (error as Error).message });
       state.stopRequested = false;
       state.isRunning = true;
       return false;

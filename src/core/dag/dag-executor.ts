@@ -11,11 +11,14 @@ import type {
 import { saveCheckpoint } from "./checkpoint.js";
 import { insertArtifact, summarizeToolResult } from "../context/artifact-store.js";
 import { DEFAULT_POLICY } from "../context/policy.js";
+import { observeBus } from "../../observe/bus.js";
+import { logger } from "../../observe/logger.js";
 
 // DAG 执行上下文
 export interface DAGExecutionContext {
   threadId: string;
   runId: string;
+  agentId: string;
   messages: Message[];
   context: AgentContext;
   tools: ToolDefinition[];
@@ -64,12 +67,20 @@ export async function executeDAG(
     if (!step) throw new Error(`DAG step not found: ${currentStepId}`);
 
     ctx.emit({ type: EventType.STEP_STARTED, stepId: step.id });
+    observeBus.emit("runs", "run.step", {
+      runId: ctx.runId,
+      threadId: ctx.threadId,
+      agentId: ctx.agentId,
+      stepIndex: stepCount,
+      type: step.type as "tool" | "llm" | "condition" | "transform",
+      stepId: step.id,
+    });
 
     // 每步执行后保存检查点（容错：中断后可从断点续跑）
     try {
-      await executeStep(step, state, ctx);
+      await executeStep(step, state, ctx, stepCount);
       await saveCheckpoint(ctx.threadId, step.id, state).catch((err) =>
-        console.error("[DAG] checkpoint save failed:", (err as Error).message)
+        logger.for("DAG").error("checkpoint save failed", { step: step.id, err: (err as Error).message })
       );
     } catch (err) {
       ctx.emit({
@@ -94,14 +105,15 @@ export async function executeDAG(
 async function executeStep(
   step: DAGStep,
   state: Record<string, any>,
-  ctx: DAGExecutionContext
+  ctx: DAGExecutionContext,
+  stepIndex: number
 ): Promise<void> {
   switch (step.type) {
     case "tool":
-      await executeToolStep(step, state, ctx);
+      await executeToolStep(step, state, ctx, stepIndex);
       break;
     case "llm":
-      await executeLLMStep(step, state, ctx);
+      await executeLLMStep(step, state, ctx, stepIndex);
       break;
     case "condition":
       // condition 步骤在 resolveNext 中通过 step.next(state) 决定跳转；
@@ -120,13 +132,22 @@ async function executeStep(
 async function executeToolStep(
   step: DAGStep,
   state: Record<string, any>,
-  ctx: DAGExecutionContext
+  ctx: DAGExecutionContext,
+  stepIndex: number
 ): Promise<void> {
   const tool = ctx.tools.find((t) => t.name === step.toolName);
   if (!tool) throw new Error(`DAG tool not found: ${step.toolName}`);
 
   const args = step.toolArgs ? step.toolArgs(state) : {};
   const toolCallId = `dagtool-${randomUUID()}`;
+  const t0 = Date.now();
+  observeBus.emit("runs", "run.tool_call", {
+    runId: ctx.runId,
+    threadId: ctx.threadId,
+    agentId: ctx.agentId,
+    toolName: tool.name,
+    args,
+  });
 
   ctx.emit({ type: EventType.TOOL_CALL_START, toolCallId, toolCallName: tool.name });
   ctx.emit({
@@ -152,9 +173,18 @@ async function executeToolStep(
       summary,
     });
   } catch (err) {
-    console.error(`[DAG artifact] insert failed for ${tool.name}:`, (err as Error).message);
+    logger.for("DAG artifact").error("insert failed", { tool: tool.name, err: (err as Error).message });
   }
   const emitted = ref ? { ref, toolName: tool.name, summary } : result;
+  observeBus.emit("runs", "run.tool_result", {
+    runId: ctx.runId,
+    threadId: ctx.threadId,
+    agentId: ctx.agentId,
+    toolName: tool.name,
+    execMs: Date.now() - t0,
+    summary,
+    ref,
+  });
 
   ctx.emit({
     type: EventType.TOOL_CALL_RESULT,
@@ -171,7 +201,8 @@ async function executeToolStep(
 async function executeLLMStep(
   step: DAGStep,
   state: Record<string, any>,
-  ctx: DAGExecutionContext
+  ctx: DAGExecutionContext,
+  stepIndex: number
 ): Promise<void> {
   if (!step.prompt) throw new Error(`DAG llm step "${step.id}" missing prompt`);
 
@@ -180,6 +211,15 @@ async function executeLLMStep(
   let reasoningOpen = false;
 
   ctx.emit({ type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant" });
+
+  observeBus.emit("runs", "run.llm_call", {
+    runId: ctx.runId,
+    threadId: ctx.threadId,
+    agentId: ctx.agentId,
+    systemPrompt: system,
+    messages: ctx.messages,
+    stepIndex,
+  });
 
   const result = streamText({
     model: ctx.createModel(),
@@ -221,6 +261,25 @@ async function executeLLMStep(
     ctx.emit({ type: EventType.REASONING_END, id: messageId });
   }
   ctx.emit({ type: EventType.TEXT_MESSAGE_END, messageId });
+
+  // usage/finishReason 在 AI SDK v5 是 promise；DeepSeek 偶发不返 usage，标可选
+  let usage: any = null;
+  let finishReason: any = undefined;
+  try {
+    usage = await result.usage;
+    finishReason = await result.finishReason;
+  } catch { /* swallow */ }
+  observeBus.emit("runs", "run.llm_response", {
+    runId: ctx.runId,
+    threadId: ctx.threadId,
+    agentId: ctx.agentId,
+    rawText: fullText,
+    usage: usage
+      ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }
+      : null,
+    finishReason,
+    stepIndex,
+  });
 
   // 写入 state，供下游引用
   const outputKey = step.outputKey ?? step.id;

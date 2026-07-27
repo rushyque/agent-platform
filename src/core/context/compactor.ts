@@ -1,6 +1,7 @@
 import { DEFAULT_POLICY, type CompactionPolicy } from "./policy.js";
 import { entryToText, foldToolResult, estimateChars } from "./folder.js";
 import { summarizePromptEntries } from "./summarizer.js";
+import { logger } from "../../observe/logger.js";
 
 // 主压缩入口：被 compactionMiddleware.transformParams 在每次模型调用前调用，
 // 覆盖 Hermes 模式 AI SDK 多步循环的每一步 + 每轮进入时的历史。无状态（除 summarizer 内部缓存）。
@@ -112,12 +113,10 @@ export const compactionMiddleware = {
       const before = estimateChars(params?.prompt);
       const compacted = await compactPrompt(params.prompt);
       const after = estimateChars(compacted);
-      console.log(
-        `[compact] ${before}→${after} chars ${before > after ? `(-${before - after})` : "(noop)"} ${Date.now() - t0}ms`
-      );
+      logger.for("compact").info("compacted", { before, after, saved: before - after, ms: Date.now() - t0 });
       return { ...params, prompt: compacted };
     } catch (err) {
-      console.error("[compactor] transformParams failed, passthrough:", (err as Error).message);
+      logger.for("compactor").error("transformParams failed, passthrough", { err: (err as Error).message });
       return params;
     }
   },
