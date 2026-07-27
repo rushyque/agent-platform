@@ -2,7 +2,7 @@
 
 基于 [CopilotKit](https://github.com/CopilotKit/CopilotKit)（AG-UI 协议）构建的 **Agent 中台**，用 TypeScript 重新实现，支持多项目接入。平台只负责"怎么传"，不定义业务语义；每个接入项目按 `AgentConfig` 契约提供自己的工具、prompt 和上下文解析。
 
-> 设计背景与完整方案见 [PLAN.md](./PLAN.md)，对外对接规范见 [docs/对接规范.md](./docs/对接规范.md)。
+> 设计背景与完整方案见 [PLAN.md](./PLAN.md)，对外对接规范见 [docs/对接规范.md](./docs/对接规范.md)，**控制台完整使用说明（从 LLM 基础到每个面板）见 [docs/观察控制台说明书.md](./docs/观察控制台说明书.md)**。
 
 ---
 
