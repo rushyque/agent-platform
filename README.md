@@ -22,7 +22,9 @@
 - **上下文管理** — 工具结果外置到 artifact 表，context 里只回 `{ref, toolName, summary}`；模型需要完整数据时主动调用 `getArtifact(ref)` 取回，避免上下文膨胀。配合压缩 / 折叠 / 线程摘要，治理长会话幻觉。
 - **会话持久化** — `DatabaseAgentRunner` 把 AG-UI 事件落到 MSSQL，`connect` 端点可恢复历史（event sourcing）。
 - **按意图选择工具子集** — `5 个聚焦工具 > 20 个工具`，项目可在 `AgentConfig.classifyIntent` / `selectTools` 自定义。
-- **调试控制台** — `/debug` 单文件页面，展示 run 轨迹（路由 / 意图 / 工具子集 / 角色）、线程回放、消息历史。
+- **实时观察控制台** — `/console` Vue SPA：Playground（签发身份 → 触发 run → 流式响应）+ 实时 Feed（结构化日志 / run 逐步轨迹 / 连接，单条多路复用 SSE）+ Agent 注册表。详见下文。
+- **结构化日志** — 全仓统一 `logger.for(source)`，双 sink（终端 + 观察 SSE），按 run 自动归属。
+- **调试控制台** — `/debug` 单文件只读页（轨迹 / 线程回放 / 消息历史）。交互式观察用 `/console`。
 - **并发压测** — `/bench` 页驱动多路并发 run，记录流式速率曲线。
 
 ---
@@ -41,12 +43,14 @@ agent-platform/
 │   │   ├── context/             # 上下文管理：压缩/折叠/摘要/artifact 外置
 │   │   ├── dag/                 # DAGAgent（Harness 模式）+ 检查点
 │   │   └── middleware/          # auth / logging / tool-injector
+│   ├── observe/                 # 实时观察层：SSE 总线 / logger / ALS / runs+connections 生产者
 │   ├── persistence/             # MSSQL：thread / run / event / database-runner
 │   ├── bench/                   # 并发压测路由与探测
 │   ├── projects/                # 项目适配层（接入点）
 │   │   ├── freight-inquiry/     # 货运询比价（多货代询价 → AI 解析报价 → 偏好评估）
 │   │   └── starlink-factory/    # 星联模具工厂运营游戏（验证中台驱动新领域）
 │   └── types/agent-config.ts    # AgentConfig / ToolDefinition / AgentContext 契约
+├── console/                     # 观察控制台 SPA（Vite + Vue3，构建产物 console/dist 由中台在 /console 托管）
 ├── public/                      # 单文件前端页：bench / debug / game / inquiry
 ├── docs/对外对接规范.md
 ├── PLAN.md                      # 设计方案
@@ -131,6 +135,10 @@ DB_NAME=agent_platform
 
 # JWT（认证中间件）
 JWT_SECRET=...
+
+# 观察控制台（/console）；默认开启，prod 可设 OBSERVE_TOKEN 限制访问
+OBSERVE_ENABLED=true
+OBSERVE_TOKEN=                   # 可选；设置后 /observe/stream 与 /console/api/* 需带 ?token=
 ```
 
 ### 运行
@@ -143,6 +151,8 @@ npm start       # node dist/server.js
 
 启动后日志会打印监听地址、LLM 端点和已注册的 agent 列表。
 
+> 要用观察控制台 `/console`，还需构建前端（一次性）：`npm --prefix console install && npm --prefix console run build`。详见下方「观察控制台」一节。
+
 ---
 
 ## HTTP 端点
@@ -150,12 +160,62 @@ npm start       # node dist/server.js
 | 路径 | 说明 |
 |------|------|
 | `/agent/{agentId}` | CopilotKit multi-route 入口，`run` / `connect` 等 AG-UI 端点 |
+| `/console` | **观察控制台 SPA**（Playground / 实时 Feed / Agents） |
+| `/observe/stream` | 多路复用 SSE（`logs` / `runs` / `connections` 通道） |
+| `/console/api/*` | 控制台后端 API：`agents`（注册表）、`mint-token`（签发 JWT） |
 | `/game` | 星联工厂游戏前端页 + 游戏状态 HTTP 路由 |
 | `/inquiry` | 货运询比价前端页 |
 | `/debug` | 调试控制台（轨迹 / 线程回放 / 只读 API） |
 | `/bench` | 并发压测页 |
 
 > 平台不兜底到任何项目：未指定 `agentId` 或 agent 未注册时，会返回明确的错误消息而非静默回退。
+
+---
+
+## 观察控制台（`/console`）
+
+实时观察中台运行——既是**请求方**（主动触发 run），又是**观察者**（看日志 / LLM I/O / 工具执行 / 连接）。独立 Vue 3 SPA（`console/`），构建后由中台在 `/console` 静态托管。
+
+### 构建与访问
+
+```bash
+# 1) 构建前端（首次或改完 console/ 后）
+npm --prefix console install
+npm --prefix console run build        # 产物 console/dist，由中台在 /console 托管
+
+# 2) 起中台
+npm run dev
+
+# 3) 浏览器打开
+http://<RUNTIME_HOST>:<RUNTIME_PORT>/console
+```
+
+开发模式（SPA 热重载，反代到本地中台）：
+
+```bash
+npm --prefix console run dev          # Vite 起在 5174，/observe /agent /console/api 反代到中台
+# 默认代理 http://127.0.0.1:9876，可用 VITE_BACKEND=http://192.168.1.155:9876 覆盖
+```
+
+### 三个视图
+
+- **实时 Feed**（`/console/feed`）—— 四栏实时活动流，全部来自 `/observe/stream` 多路复用 SSE：
+  - **Logs**：全仓结构化日志（按 source / level / runId / data 过滤）。带 `replay` 标记的是连上时回放的历史，之后是实时。
+  - **Runs**：run 列表（路由 / 意图 / 状态 / 耗时）。点开右侧 **Trace** 看**逐步轨迹**：`run.started` → `llm_call`（system prompt 全文 + messages）→ `tool_call` / `tool_result`（args / execMs / summary / artifact ref）→ `llm_response`（原始响应文本 + token 用量）→ `run.finished`。
+  - **连接**：`/agent/*` 与项目路由的请求（method / path / 状态 / 耗时 / 来源 IP；控制台自己发的请求标 `console`）。
+- **Agents**（`/console/agents`）—— 中台已注册的 AgentConfig 清单（Hermes / DAG）。
+- **Playground**（`/console/playground`）—— 当请求方，三步：
+  1. 选 agent + 填 `userId` / `role`（+ 可选 claims JSON）→ **签发 token**：中台用 `JWT_SECRET` 现签一个 JWT（正好测「权限双层面」——随便造 role）。
+  2. 填消息 → **发送**（或 Ctrl+Enter）→ 前端 POST `/agent/{id}/run`，流式接收响应。
+  3. 响应区看流式文本，下方「原始 AG-UI 事件」看完整 SSE 事件流；该 run 的**内部轨迹**（工具调用、LLM prompt/response、折叠）在「实时 Feed」的 Trace 里同步出现。
+
+### 实时通道（不落库）
+
+`/observe/stream` 是单条多路复用 SSE，envelope `{channel, type, ts, payload, replay?}`，`channel ∈ logs | runs | connections`。前端连上先回放每通道最近 30 分钟环形缓冲（`replay:true`），再续实时。**观察层零 DB**——重启即清零，无长窗口历史；要看一个「过去的 run」，用 Playground 同条件重跑即可。
+
+### 访问控制
+
+默认开启（`OBSERVE_ENABLED=true`）。prod 可设 `OBSERVE_TOKEN=xxx`：届时 `/observe/stream` 与 `/console/api/*` 需带 `?token=xxx` 或 `Authorization: Bearer xxx`（控制台把 admin token 存 localStorage 自动附上）；`OBSERVE_ENABLED=false` 整层关闭、相关路径返回 404。
 
 ---
 
