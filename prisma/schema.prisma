@@ -1,0 +1,155 @@
+// 中台自有运行时状态 schema（ai_harness_db）。
+// 业务库 ai_platform_db（NL2SQL）不在此，仍走 src/persistence/db.ts:getPool()。
+//
+// 注释两层维护（文案一致）：
+//   1) 本文件 `///` 文档注释 —— 代码层，给读 schema 的人/AI。
+//   2) DB 的 MS_Description（SSM/information_schema 可见）—— 由 scripts/apply-comments.ts
+//      用 sp_addextendedproperty 写入（Prisma 不管 DB 注释）。改注释后 npm run db:comment 重跑。
+//
+// 设计要点：Thread 为父表，外键 + ON DELETE CASCADE（删线程自动清子表）。
+// AgentEvent append-only，按自增 id 升序重放。event.runId / artifact.runId 不建外键（时序）。
+// sqlserver 无 Json 类型 → payload/args/result 用 String @db.NVarChar(max)，应用层 stringify/parse。
+// binaryTargets：native=开发机(Windows)；debian-openssl-3.0.x=生产(Ubuntu 22.04+)，
+//   部署前在 aiserver 跑 `openssl version -v` 确认，1.1.x 改 debian-openssl-1.1.x。
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("HARNESS_DATABASE_URL")
+}
+
+/// 会话线程主表。一次连续对话的元数据；事件/审计/artifact/摘要都以 thread_id 外键挂此，删线程级联清空。
+model Thread {
+  /// 线程唯一标识（通常 UUID）。其余表以 thread_id 关联本字段。
+  id        String   @id @db.NVarChar(128)
+  /// 所属 agent（项目 agentId，如 starlink_factory / freight_inquiry / db_demo）。
+  agentId   String   @map("agent_id") @db.NVarChar(64)
+  /// 创建人 userId，可空。
+  createdBy String?  @map("created_by") @db.NVarChar(128)
+  /// 线程标题（预留，目前未填）。
+  title     String?  @db.NVarChar(500)
+  /// 是否归档（软删除标记）。
+  archived  Boolean  @default(false)
+  /// 创建时间（UTC）。
+  createdAt DateTime @default(now()) @map("created_at")
+  /// 最后更新时间（Prisma 自动维护）。
+  updatedAt DateTime @updatedAt        @map("updated_at")
+
+  events    AgentEvent[]
+  runs      AgentRun[]
+  artifacts Artifact[]
+  summary   ThreadSummary?
+
+  @@index([updatedAt])
+  @@map("threads")
+}
+
+/// AG-UI 事件流（append-only）。一次 run 产生的全部事件：消息增量/工具调用/状态快照等。connect 重放与历史回放的数据源，按 id 升序还原对话时序。
+model AgentEvent {
+  /// 自增主键。同线程内 id 升序即事件发生顺序，是重放排序依据。
+  id        BigInt   @id @default(autoincrement())
+  /// 所属线程，外键→threads.id（删线程级联）。
+  threadId  String   @map("thread_id") @db.NVarChar(128)
+  /// 产生本事件的 run 标识。不建外键（审计晚于事件落库，时序不允）。
+  runId     String   @map("run_id")    @db.NVarChar(128)
+  /// 产生本事件的 agent。
+  agentId   String   @map("agent_id")  @db.NVarChar(64)
+  /// AG-UI 事件类型，如 TEXT_MESSAGE_CONTENT / TOOL_CALL / TOOL_RESULT / RUN_STARTED / RUN_FINISHED / STATE_SNAPSHOT。
+  eventType String   @map("event_type") @db.NVarChar(64)
+  /// 事件完整 JSON（整个 BaseEvent 序列化）。sqlserver 无 Json 类型故存文本，读取时 JSON.parse 还原。
+  payload   String   @db.NVarChar(max)
+  /// 落库时间（UTC）。
+  createdAt DateTime @default(now()) @map("created_at")
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, id])
+  @@index([runId])
+  @@index([createdAt])
+  @@map("agent_events")
+}
+
+/// 运行审计。每次 run 的执行记录：步数/token/耗时/状态/模型/意图，用于监控大盘与排障。
+model AgentRun {
+  /// 自增主键（id 倒序=最新优先）。
+  id               BigInt   @id @default(autoincrement())
+  /// 所属线程，外键→threads.id（删线程级联）。
+  threadId         String   @map("thread_id") @db.NVarChar(128)
+  /// 本次 run 的唯一标识（UUID）。
+  runId            String   @map("run_id")    @db.NVarChar(128)
+  /// 执行的 agent。
+  agentId          String   @map("agent_id")  @db.NVarChar(64)
+  /// 发起人 userId，可空。
+  userId           String?  @map("user_id")   @db.NVarChar(128)
+  /// 本次 run 的模型步数（工具循环轮次）。
+  steps            Int      @default(0)
+  /// 输入 token 数（模型返回；部分模型不返则 null）。
+  promptTokens     Int?     @map("prompt_tokens")
+  /// 输出 token 数（可空）。
+  completionTokens Int?     @map("completion_tokens")
+  /// 本次 run 耗时（毫秒）。
+  durationMs       Int?     @map("duration_ms")
+  /// 结束原因：stop=正常完成 / tool-calls=调工具继续 / error 等。
+  finishReason     String?  @map("finish_reason") @db.NVarChar(32)
+  /// 使用的模型（如 glm-5.2 / deepseek-chat）。
+  model            String?  @db.NVarChar(64)
+  /// 意图分类（Hermes 模式透传；DAG 模式为 'dag'）。
+  intent           String?  @db.NVarChar(64)
+  /// 运行状态：success / error。
+  status           String   @db.NVarChar(20)
+  /// 记录时间（UTC）。
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@index([agentId, createdAt])
+  @@index([createdAt])
+  @@index([status])
+  @@map("agent_runs")
+}
+
+/// 工具结果外置。大块工具返回值按 ref 存储，模型上下文只带 ref+summary，需要完整数据时 getArtifact(ref) 取回。
+model Artifact {
+  /// 工具结果全局唯一引用，格式 art-<base36时间>-<序号>。getArtifact 据此取回。
+  ref       String   @id @db.NVarChar(64)
+  /// 所属线程（可空，外键→threads.id）。
+  threadId  String?  @map("thread_id") @db.NVarChar(128)
+  /// 产生该结果的 run（可空；不建外键）。
+  runId     String?  @map("run_id")    @db.NVarChar(128)
+  /// 产生该结果的工具名。
+  toolName  String   @map("tool_name") @db.NVarChar(64)
+  /// 工具入参 JSON（可空）。
+  args      String?  @db.NVarChar(max)
+  /// 工具完整返回值 JSON（可能 KB~MB）。模型上下文只放 summary，需要时按 ref 取本字段。
+  result    String   @db.NVarChar(max)
+  /// 结果摘要（从 result 提取的关键文本，截断 1000 字；进入模型上下文的精简结论）。
+  summary   String?  @db.NVarChar(1000)
+  /// 产生时间（UTC）。
+  createdAt DateTime @default(now()) @map("created_at")
+
+  thread Thread? @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@index([runId])
+  @@index([createdAt])
+  @@map("artifacts")
+}
+
+/// 线程滚动摘要。每线程一段事实摘要（run 结束滚动覆写），下次 run 注入 system 作为延续上下文。
+model ThreadSummary {
+  /// 所属线程，主键+外键→threads.id（一对一，删线程级联）。
+  threadId  String   @id @map("thread_id") @db.NVarChar(128)
+  /// 摘要全文（单段：已做/关键数据/结论/约束；每次 run 结束覆写）。
+  summary   String   @db.NVarChar(max)
+  /// 最后滚动时间。
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@map("thread_summary")
+}

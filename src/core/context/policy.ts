@@ -31,13 +31,18 @@ export interface CompactionPolicy {
 }
 
 export const DEFAULT_POLICY: CompactionPolicy = {
-  hotToolResults: 1,
-  readOnlyToolKeywords: ["view", "list", "detail"],
+  // 折中（2026-07-28）：K=1 激进折叠在 DeepSeek 上是幻觉放大器（信息丢失→脑补），
+  // 放宽到 2，多留近期上下文。核心权衡转向：为准确率付 token，不靠压缩省 token。
+  hotToolResults: 2,
+  // 关键词兜底（ToolDefinition.readonly 字段为主判定）：补充中台内置只读工具命名。
+  readOnlyToolKeywords: ["view", "list", "detail", "query", "state", "observe", "recall", "note"],
   foldHintStyle: "silent",
   keepRecentUserMessages: 2,
-  maxPromptChars: 18000,
+  // 放宽预算：留更多上下文，减少因压缩丢失触发的幻觉。
+  maxPromptChars: 24000,
   toolResultSummaryChars: 200,
   foldedSummaryChars: 80,
-  summarizeThresholdChars: 2000,
+  // 放宽摘要触发：不那么急着压成摘要（摘要本身有损）。
+  summarizeThresholdChars: 3000,
   summaryBudgetChars: 600,
 };

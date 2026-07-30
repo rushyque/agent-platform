@@ -11,11 +11,17 @@
     "go:prod": "node scripts/go.mjs prod",
     "console:install": "npm --prefix console install",
     "console:build": "npm --prefix console run build",
-    "console:dev": "npm --prefix console run dev"
+    "console:dev": "npm --prefix console run dev",
+    "postinstall": "prisma generate",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:comment": "tsx scripts/apply-comments.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.115",
     "@copilotkit/runtime": "^1.61.2",
+    "@prisma/client": "^6.19.0",
     "ai": "^5.0.220",
     "dotenv": "^16.4.0",
     "jsonwebtoken": "^9.0.0",
@@ -26,6 +32,7 @@
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.0",
     "@types/node": "^22.0.0",
+    "prisma": "^6.19.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

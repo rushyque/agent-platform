@@ -1,7 +1,7 @@
 import { wrapLanguageModel, type LanguageModel } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { settings } from "../config/settings.js";
-import { compactionMiddleware } from "./context/compactor.js";
+import { createCompactionMiddleware } from "./context/compactor.js";
 import { logger } from "../observe/logger.js";
 
 // DeepSeek Reasoning 中间件
@@ -79,10 +79,29 @@ export const deepseekReasoningMiddleware = {
   },
 };
 
-// 创建 LLM 客户端（包装 DeepSeek reasoning + 上下文压缩中间件）。
+// 默认低温：抑制 DeepSeek 发散、降低幻觉。调用方显式传 temperature 时不覆盖。
+// 统一主题——"外部确定性 > 内部猜测"：低温是给模型加确定性约束的一环。
+const DEFAULT_TEMPERATURE = 0.2;
+function createTemperatureMiddleware(override?: number) {
+  const t = override ?? DEFAULT_TEMPERATURE;
+  return {
+    middlewareVersion: "v2" as const,
+    transformParams: async ({ params }: any) => ({
+      ...params,
+      temperature: params.temperature ?? t,
+    }),
+  };
+}
+
+// 创建 LLM 客户端（包装 DeepSeek reasoning + 上下文压缩 + 低温 中间件）。
 // 上下文压缩中间件在每次模型调用前（含 AI SDK 多步循环内部每一步）裁剪 prompt，
 // 工具结果外置后只带 ref+summary，旧内容折叠/摘要——避免长 context 触发 DeepSeek 幻觉。
-export function createLLMClient(modelOverride?: string): LanguageModel {
+// opts.readonlyTools：per-run 闭包传入该 run 激活的只读工具名，让压缩按 readonly 声明判定。
+// opts.temperature：覆盖默认低温。
+export function createLLMClient(
+  modelOverride?: string,
+  opts?: { readonlyTools?: Set<string>; temperature?: number }
+): LanguageModel {
   const model = modelOverride || settings.DEEPSEEK_MODEL;
   const openai = createOpenAI({
     apiKey: settings.DEEPSEEK_API_KEY,
@@ -94,6 +113,10 @@ export function createLLMClient(modelOverride?: string): LanguageModel {
   const baseModel = (openai as any).chat(model);
   return wrapLanguageModel({
     model: baseModel,
-    middleware: [deepseekReasoningMiddleware, compactionMiddleware],
+    middleware: [
+      deepseekReasoningMiddleware,
+      createCompactionMiddleware({ readonlyTools: opts?.readonlyTools }),
+      createTemperatureMiddleware(opts?.temperature),
+    ],
   });
 }

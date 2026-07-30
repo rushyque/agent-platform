@@ -21,6 +21,7 @@ import { handleObserveRoutes, logger, runWithCtx, observeBus } from "./observe/i
 import { DAGAgent } from "./core/dag/dag-agent.js";
 import { DatabaseAgentRunner } from "./persistence/database-runner.js";
 import { ensureSchema } from "./persistence/db.js";
+import { startCleanup } from "./persistence/cleanup.js";
 import { settings } from "./config/settings.js";
 import { registerAllProjects } from "./projects/index.js";
 import type { ToolDefinition, AgentContext } from "./types/agent-config.js";
@@ -69,6 +70,14 @@ const COMPACTION_GUIDE =
   "若某个工具结果以 {ref, toolName, summary} 形式返回、或折叠占位里明确带 ref=art-xxx，" +
   "你可以调用 getArtifact(ref) 取回其完整数据；占位里没有 ref 时说明未持久化、无法取回，直接基于摘要推进。" +
   "优先基于已有信息推进任务，不要重复查看相同内容，不要在没有有效 ref 时调用 getArtifact。";
+
+// 工具优先纪律 —— 统一主题"外部确定性 > 内部猜测"：事实必须从工具/接口/计算来，不从模型脑子里来。
+// 与 COMPACTION_GUIDE 协调：鼓励"查证"但不鼓励"无意义重复查"（DeepSeek 倾向重复查是已知毛病）。
+const TOOL_FIRST_GUIDE =
+  "\n\n[工作纪律]\n" +
+  "1. 事实来自工具：任何具体数据（数字、状态、记录）必须来自工具结果，禁止凭记忆或推测给出。\n" +
+  "2. 关键结论交叉验证：重要判断（尤其涉及具体数值）建议用第二个工具或重查确认，不单凭一次结果。\n" +
+  "3. 不做无意义重复查询：已查过的相同信息不反复调用同一工具。";
 
 // 将 AgentConfig 的 ToolDefinition 转换为 AI SDK tool 记录。
 // 工具结果一律外置到 artifact 表，context 里只回 {ref, toolName, summary}；
@@ -234,6 +243,9 @@ const runtime = new CopilotRuntime({
       token: token || "",
       headers: Object.fromEntries(request.headers.entries()),
     });
+    // 平台 meta 注入：若 AgentConfig 提供 database（DatabaseBackend），挂到 context，
+    // 供 query_database 工具从 context.database 取用（免项目在 resolveContext 手动塞）。
+    if (config.database) context.database = config.database;
 
     // 6. 路由：DAG（Harness）vs BuiltInAgent（Hermes）
     if (config.dagDefinition) {
@@ -295,6 +307,12 @@ const runtime = new CopilotRuntime({
             override: config.selectTools,
           });
 
+          // 收集本 run 激活的只读工具名（按 ToolDefinition.readonly 声明），
+          // 闭包传入 createLLMClient → 压缩中间件据此判定不折叠（命名关键词兜底）。
+          const readonlyTools = new Set(
+            activeTools.filter((t) => t.readonly).map((t) => t.name)
+          );
+
           // 构建 system prompt（透传 intent，避免重复分类）+ 中台级上下文管理约定
           const prevSummary = getThreadSummary(input.threadId);
           const systemPrompt =
@@ -304,6 +322,7 @@ const runtime = new CopilotRuntime({
               intent,
             }) +
             COMPACTION_GUIDE +
+            TOOL_FIRST_GUIDE +
             (prevSummary ? `\n\n[上一阶段摘要（本线程延续上下文）] ${prevSummary}` : "");
 
           const aiTools = {
@@ -334,6 +353,8 @@ const runtime = new CopilotRuntime({
             threadId: input.threadId,
             runId: input.runId,
             messages: input.messages,
+            model: config.model ?? settings.DEEPSEEK_MODEL,
+            intent,
           });
 
           logger.for("Factory").debug("hermes run", {
@@ -372,23 +393,28 @@ const runtime = new CopilotRuntime({
             model: config.model ?? settings.DEEPSEEK_MODEL,
           });
 
-          observeBus.emit("runs", "run.llm_call", {
-            runId: input.runId,
-            threadId: input.threadId,
-            agentId,
-            systemPrompt,
-            messages,
-            stepIndex: 0,
-          });
-
           return streamText({
-            model: createLLMClient(config.model),
+            model: createLLMClient(config.model, { readonlyTools }),
             system: systemPrompt,
             // ai v5 与 CopilotKit 已对齐：ModelMessage[] 直接透传
             messages: messages as any,
             tools: aiTools,
             abortSignal,
             stopWhen: stepCountIs(30),
+            // 每步开始发射 run.llm_call（带该步输入与 stepNumber）——治此前多步 run 只抓首步 prompt。
+            // prepareStep 是 AI SDK v5 原生钩子，每步 doStream 前调用、自带 stepNumber，无需自维护计数器。
+            // 与下方 onStepFinish 的 run.llm_response（stepIndex 从 0 起）逐步成对，RunTrace 每步输入可见。
+            prepareStep: ({ stepNumber, messages: stepMessages }) => {
+              observeBus.emit("runs", "run.llm_call", {
+                runId: input.runId,
+                threadId: input.threadId,
+                agentId,
+                systemPrompt,
+                messages: stepMessages,
+                stepIndex: stepNumber,
+              });
+              return {}; // 纯观察，不覆盖 model/system/messages/toolChoice
+            },
             onStepFinish: hooks.onStepFinish,
             onFinish: hooks.onFinish,
           });
@@ -573,6 +599,8 @@ async function main() {
   } catch (err) {
     logger.for("Startup").error("ensureSchema failed, continuing without persisted schema", { err: (err as Error).message });
   }
+
+  startCleanup(); // TTL 清理（事件/审计/artifact）；interval.unref 不阻止进程退出
 
   const listener = createCopilotNodeListener({
     runtime: runtime.instance,

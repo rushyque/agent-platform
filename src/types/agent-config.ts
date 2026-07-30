@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Message } from "@ag-ui/core";
 import type { LanguageModel } from "ai";
+import type { DatabaseBackend } from "../core/tools/query-database/backend.js";
 
 // 平台上下文 —— 项目适配层返回的任意结构
 export type AgentContext = Record<string, any>;
@@ -11,6 +12,9 @@ export interface ToolDefinition {
   description: string;
   parameters: z.ZodTypeAny;
   execute: (args: any, context: AgentContext) => Promise<any>;
+  // 可选：声明只读工具。只读工具的结果不进入上下文折叠候选（始终完整保留），
+  // 断"折叠→重查→再折叠"死循环。判定以本字段为准，命名关键词（view/list/detail）兜底。
+  readonly?: boolean;
 }
 
 // AgentConfig —— 每个接入系统的配置契约
@@ -59,6 +63,15 @@ export interface AgentConfig {
 
   // 可选：自定义创建 LLM model 实例（DAG 模式优先使用；缺省走平台 DeepSeek model）
   createModel?: () => LanguageModel;
+
+  // 可选：为 query_database 提供 DatabaseBackend（如 createMssqlBackend()）。
+  // 存在则中台自动注入到 context.database，供 query_database 工具使用。
+  database?: DatabaseBackend;
+
+  // 可选：observe_state 的精简概览钩子（返回文本摘要）。
+  // 项目在 resolveContext 里把 summarizeState 挂到 context；存在则 observe_state 优先用它，
+  // 返回 { summary }；缺省回退 context.getState，返回完整 { state }（大对象由 toAISDKTools 外置）。
+  summarizeState?: (params: { context: AgentContext; focus?: string }) => string | Promise<string>;
 }
 
 // DAG 步骤定义（Harness 模式）

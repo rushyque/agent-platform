@@ -1,0 +1,23 @@
+BEGIN TRY
+
+BEGIN TRAN;
+
+-- AlterTable
+ALTER TABLE [dbo].[agent_events] ALTER COLUMN [payload] NVARCHAR(max) NOT NULL;
+
+-- AlterTable
+ALTER TABLE [dbo].[artifacts] ALTER COLUMN [args] NVARCHAR(max) NULL;
+ALTER TABLE [dbo].[artifacts] ALTER COLUMN [result] NVARCHAR(max) NOT NULL;
+
+COMMIT TRAN;
+
+END TRY
+BEGIN CATCH
+
+IF @@TRANCOUNT > 0
+BEGIN
+    ROLLBACK TRAN;
+END;
+THROW
+
+END CATCH

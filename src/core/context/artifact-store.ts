@@ -1,6 +1,13 @@
-// 工具结果外置 —— 纯内存（会话级）。不落库。
-// 一次对话内按 ref 取回即可，对话结束连同 thread 一起丢弃。中台不做长期记忆，
-// DB 反而引入凭据/超时/降级问题（见测试报告），故用内存 Map。
+import { prisma } from "../../persistence/prisma.js";
+import { logger } from "../../observe/logger.js";
+
+const log = logger.for("artifact-store");
+
+// 工具结果外置 —— Prisma(ai_harness_db.artifacts) + 内存 LRU 热缓存。
+// getArtifact 高频被模型调用 → 内存命中省 DB 随机读，未命中查 DB 回填。
+// 写：内存立即存（保证外置 ref 一定能取回，与 server.ts 降级语义一致），DB 写 fire-and-forget
+//     不阻塞工具返回；DB 失败只记日志（已在内存，不丢）。
+// result 是 JSON 文本（sqlserver 无 Json 类型），应用层 stringify/parse。
 
 export interface ArtifactRecord {
   ref: string;
@@ -13,41 +20,59 @@ export interface ArtifactRecord {
   createdAt: string;
 }
 
-interface Entry {
+// ---- 内存热缓存（LRU）----
+interface CacheEntry {
   record: ArtifactRecord;
   ts: number;
 }
+const cache = new Map<string, CacheEntry>();
+const MAX_CACHE = 2000;
 
-const store = new Map<string, Entry>();
-const MAX_ENTRIES = 2000; // 内存上限，超限淘汰最老（避免长会话无限增长）
-
-function evict(): void {
-  while (store.size > MAX_ENTRIES) {
-    let oldestKey: string | null = null;
+function cacheGet(ref: string): ArtifactRecord | null {
+  const e = cache.get(ref);
+  if (!e) return null;
+  e.ts = Date.now();
+  return e.record;
+}
+function cacheSet(record: ArtifactRecord): void {
+  cache.set(record.ref, { record, ts: Date.now() });
+  while (cache.size > MAX_CACHE) {
+    let oldest: string | null = null;
     let oldestTs = Infinity;
-    for (const [k, v] of store) {
+    for (const [k, v] of cache) {
       if (v.ts < oldestTs) {
         oldestTs = v.ts;
-        oldestKey = k;
+        oldest = k;
       }
     }
-    if (oldestKey) store.delete(oldestKey);
+    if (oldest) cache.delete(oldest);
     else break;
   }
 }
 
+// ---- helpers ----
 let counter = 0;
 function newRef(): string {
   counter++;
   return `art-${Date.now().toString(36)}-${counter.toString(36)}`;
 }
-
 function safeStringify(v: unknown): string {
   try {
     return JSON.stringify(v);
   } catch {
     return String(v);
   }
+}
+function parseJson(s: string | null): unknown {
+  if (s == null) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
+function toDate(v: unknown): string {
+  return v instanceof Date ? v.toISOString() : String(v);
 }
 
 // 提取工具结果的"摘要文本"：优先取业务字段（trace/message/summary/error），
@@ -84,6 +109,7 @@ export async function insertArtifact(params: {
   summary?: string | null;
 }): Promise<string> {
   const ref = newRef();
+  const summary = (params.summary ?? "").slice(0, 1000) || null;
   const record: ArtifactRecord = {
     ref,
     threadId: params.threadId ?? null,
@@ -91,16 +117,58 @@ export async function insertArtifact(params: {
     toolName: params.toolName,
     args: params.args ?? null,
     result: params.result,
-    summary: (params.summary ?? "").slice(0, 1000) || null,
+    summary,
     createdAt: new Date(Date.now()).toISOString(),
   };
-  store.set(ref, { record, ts: Date.now() });
-  evict();
+  // 内存立即存（无论 DB 是否成功，ref 都能取回）
+  cacheSet(record);
+  // DB 持久 fire-and-forget：不阻塞工具返回；失败只记日志（内存已有，不丢）
+  void prisma.artifact
+    .create({
+      data: {
+        ref,
+        threadId: params.threadId ?? null,
+        runId: params.runId ?? null,
+        toolName: params.toolName,
+        args: safeStringify(params.args ?? null),
+        result: safeStringify(params.result),
+        summary,
+      },
+    })
+    .catch((err: unknown) => {
+      log.error("insertArtifact db write failed (degraded, kept in memory)", {
+        ref,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
   return ref;
 }
 
 export async function getArtifact(ref: string): Promise<ArtifactRecord | null> {
-  return store.get(ref)?.record ?? null;
+  const hit = cacheGet(ref);
+  if (hit) return hit;
+  try {
+    const row = await prisma.artifact.findUnique({ where: { ref } });
+    if (!row) return null;
+    const record: ArtifactRecord = {
+      ref: row.ref,
+      threadId: row.threadId,
+      runId: row.runId,
+      toolName: row.toolName,
+      args: parseJson(row.args),
+      result: parseJson(row.result),
+      summary: row.summary,
+      createdAt: toDate(row.createdAt),
+    };
+    cacheSet(record);
+    return record;
+  } catch (err) {
+    log.error("getArtifact read failed (degraded)", {
+      ref,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 export async function listArtifacts(opts?: {
@@ -108,9 +176,29 @@ export async function listArtifacts(opts?: {
   runId?: string;
   limit?: number;
 }): Promise<ArtifactRecord[]> {
-  let arr = Array.from(store.values()).map((e) => e.record);
-  if (opts?.threadId) arr = arr.filter((r) => r.threadId === opts.threadId);
-  if (opts?.runId) arr = arr.filter((r) => r.runId === opts.runId);
-  arr.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return arr.slice(0, opts?.limit ?? 100);
+  try {
+    const rows = await prisma.artifact.findMany({
+      where: {
+        ...(opts?.threadId ? { threadId: opts.threadId } : {}),
+        ...(opts?.runId ? { runId: opts.runId } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: opts?.limit ?? 100,
+    });
+    return rows.map((r) => ({
+      ref: r.ref,
+      threadId: r.threadId,
+      runId: r.runId,
+      toolName: r.toolName,
+      args: parseJson(r.args),
+      result: parseJson(r.result),
+      summary: r.summary,
+      createdAt: toDate(r.createdAt),
+    }));
+  } catch (err) {
+    log.error("listArtifacts read failed (degraded)", {
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
 }

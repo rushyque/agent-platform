@@ -7,4 +7,4 @@ export { DEFAULT_POLICY } from "./policy.js";
 export type { CompactionPolicy } from "./policy.js";
 export { foldToolResult, entryToText, estimateChars } from "./folder.js";
 export { summarizePromptEntries, rollupThreadSummary } from "./summarizer.js";
-export { getThreadSummary, setThreadSummary } from "./thread-memory.js";
+export { getThreadSummary, setThreadSummary, loadThreadSummariesFromDb } from "./thread-memory.js";

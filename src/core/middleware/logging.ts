@@ -18,6 +18,8 @@ export interface RunHooksParams {
   threadId: string;
   runId: string;
   messages?: any[];
+  model?: string | null;
+  intent?: string | null;
 }
 
 // 从 steps + user 消息构造本次对话的可摘要文本
@@ -41,7 +43,7 @@ function buildRunText(steps: any[], messages?: any[]): string {
 }
 
 export function createRunHooks(params: RunHooksParams) {
-  const { agentId, userId, threadId, runId, messages } = params;
+  const { agentId, userId, threadId, runId, messages, model, intent } = params;
   const startedAt = Date.now();
   let stepIndex = -1;
 
@@ -122,6 +124,10 @@ export function createRunHooks(params: RunHooksParams) {
           steps: stepCount,
           promptTokens,
           completionTokens,
+          durationMs: totalMs,
+          finishReason: finishReason ?? null,
+          model: model ?? null,
+          intent: intent ?? null,
           status: finishReason === "error" ? "error" : "success",
         });
       } catch (err) {

@@ -9,14 +9,17 @@ import { logger } from "../../observe/logger.js";
 // 适配 AI SDK v5 prompt：entry = { role, content: [{type, ...}] }，tool-result 是 content 里的 part。
 export async function compactPrompt(
   prompt: any[],
-  policy: CompactionPolicy = DEFAULT_POLICY
+  policy: CompactionPolicy = DEFAULT_POLICY,
+  readonlyTools?: Set<string>
 ): Promise<any[]> {
   if (!Array.isArray(prompt) || prompt.length === 0) return prompt;
 
   // 只读工具结果不进入折叠候选（始终完整保留），断"折叠→重查→再折叠"循环。
-  // 按工具名包含关键词判断（大小写不敏感），覆盖 view/list/detail 等只读命名。
+  // 判定优先级：① 工具显式声明 readonly（per-run 传入，可靠，治"起错名致折叠死循环"）
+  //            ② 工具名包含关键词（兜底，大小写不敏感，覆盖 view/list/detail 等命名）
   const isReadOnly = (part: any) => {
     const name = (part?.toolName ?? "").toLowerCase();
+    if (readonlyTools?.has(name)) return true;
     return policy.readOnlyToolKeywords.some((k) => name.includes(k));
   };
 
@@ -105,19 +108,31 @@ async function shrinkOldSection(
 
 // AI SDK LanguageModelMiddleware：在每次 doStream/doGenerate 前（含 Hermes 多步循环内部每一步）
 // 压缩 params.prompt。与 deepseekReasoningMiddleware 一起挂在 createLLMClient 上。
-export const compactionMiddleware = {
-  middlewareVersion: "v2" as const,
-  transformParams: async ({ params }: any) => {
-    const t0 = Date.now();
-    try {
-      const before = estimateChars(params?.prompt);
-      const compacted = await compactPrompt(params.prompt);
-      const after = estimateChars(compacted);
-      logger.for("compact").info("compacted", { before, after, saved: before - after, ms: Date.now() - t0 });
-      return { ...params, prompt: compacted };
-    } catch (err) {
-      logger.for("compactor").error("transformParams failed, passthrough", { err: (err as Error).message });
-      return params;
-    }
-  },
-};
+//
+// 工厂形式：每次 run 创建 client 时，把该 run 激活的"只读工具名集合"闭包进来，
+// 让 compactPrompt 能按 ToolDefinition.readonly 声明判定只读（不靠 ALS——streamText
+// 惰性迭代下 ALS 续体不可靠，见 observe/als.ts 注释）。
+export function createCompactionMiddleware(opts?: { readonlyTools?: Set<string> }) {
+  const readonlyTools = opts?.readonlyTools
+    ? new Set([...opts.readonlyTools].map((n) => n.toLowerCase()))
+    : undefined;
+  return {
+    middlewareVersion: "v2" as const,
+    transformParams: async ({ params }: any) => {
+      const t0 = Date.now();
+      try {
+        const before = estimateChars(params?.prompt);
+        const compacted = await compactPrompt(params.prompt, DEFAULT_POLICY, readonlyTools);
+        const after = estimateChars(compacted);
+        logger.for("compact").info("compacted", { before, after, saved: before - after, ms: Date.now() - t0 });
+        return { ...params, prompt: compacted };
+      } catch (err) {
+        logger.for("compactor").error("transformParams failed, passthrough", { err: (err as Error).message });
+        return params;
+      }
+    },
+  };
+}
+
+// 默认实例：无 per-run 只读映射时用（nl2sql/extract 等内部 generateObject 调用）。
+export const compactionMiddleware = createCompactionMiddleware();

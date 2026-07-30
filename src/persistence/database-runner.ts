@@ -74,6 +74,14 @@ export class DatabaseAgentRunner extends AgentRunner {
     state.subject = nextSubject;
 
     const runAgent = async () => {
+      // 确保 thread 行先于工具产生的 artifact/event 存在（外键父行）。
+      // persist 在 run 结束才 upsertThread，但工具 execute 产生的 artifact 在 run 进行中就落库，
+      // 故此处提前建一次（幂等）；upsertThread 经 safeAppend 不抛、不阻塞流。
+      await upsertThread({
+        id: request.threadId,
+        agentId: request.agent.agentId ?? "default",
+        createdBy: (request.input as any).userId ?? null,
+      });
       // 计算历史消息 id，用于从 RUN_STARTED 中剔除已见消息，避免重复回放
       const historicMessageIds = new Set<string>();
       try {
@@ -141,8 +149,13 @@ export class DatabaseAgentRunner extends AgentRunner {
           nextSubject.next(event);
         }
 
-        // 持久化（compacted 事件 + 线程元数据）；失败仅记日志，不阻断流
-        await this.persist(request, currentRunEvents);
+        // 持久化（compacted 事件 + 线程元数据）fire-and-forget：不阻塞 isRunning 释放，
+        // DB 慢/挂不拖同线程下一个 run；persist 内部经 safeAppend 已超时+不抛。
+        void this.persist(request, currentRunEvents).catch((err) =>
+          log.error("persist failed (degraded, run already streamed)", {
+            err: err instanceof Error ? err.message : String(err),
+          })
+        );
       } catch (error) {
         const interruptionMessage =
           error instanceof Error ? error.message : String(error);
@@ -156,7 +169,11 @@ export class DatabaseAgentRunner extends AgentRunner {
         }
         try {
           if (currentRunEvents.length > 0) {
-            await this.persist(request, currentRunEvents);
+            void this.persist(request, currentRunEvents).catch((err) =>
+              log.error("persist (error path) failed (degraded)", {
+                err: err instanceof Error ? err.message : String(err),
+              })
+            );
           }
         } catch (persistErr) {
           log.error("persist (error path) failed", { err: (persistErr as Error).message });
