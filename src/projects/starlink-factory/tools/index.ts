@@ -1,5 +1,6 @@
 // 工具聚合：导出星联模具工厂的全部工具与列表。
 import type { ToolDefinition } from "../../../types/agent-config.js";
+import { coreTools } from "../../../core/tools/index.js";
 import { listOrdersTool, orderDetailTool, acceptInquiryTool, deliverOrderTool } from "./orders.js";
 import { startDesignTool, scheduleJobTool, unscheduleJobTool, runTrialTool } from "./production.js";
 import {
@@ -10,11 +11,14 @@ import {
 } from "./workshop.js";
 import {
   viewDashboardTool,
+  factoryShiftReportTool,
   advanceShiftTool,
   advanceShiftsTool,
   runPipelineTool,
   listEventsTool,
   handleEventTool,
+  listTechTool,
+  researchTool,
   resetGameTool,
 } from "./ops.js";
 
@@ -32,16 +36,20 @@ export {
   viewInventoryTool,
   purchaseMaterialTool,
   viewDashboardTool,
+  factoryShiftReportTool,
   advanceShiftTool,
   advanceShiftsTool,
   runPipelineTool,
   listEventsTool,
   handleEventTool,
+  listTechTool,
+  researchTool,
   resetGameTool,
 };
 
 export const factoryTools: ToolDefinition[] = [
   viewDashboardTool,
+  factoryShiftReportTool,
   listOrdersTool,
   orderDetailTool,
   acceptInquiryTool,
@@ -59,5 +67,14 @@ export const factoryTools: ToolDefinition[] = [
   runPipelineTool,
   listEventsTool,
   handleEventTool,
+  listTechTool,
+  researchTool,
   resetGameTool,
+  // 中台通用工具（observe_state 需 resolveContext 的 getState/formatTime，已注入；其余零接线）
+  coreTools.observeState,
+  coreTools.now,
+  coreTools.recall,
+  coreTools.setNote,
+  coreTools.getNote,
+  coreTools.confirm,
 ];

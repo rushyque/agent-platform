@@ -6,7 +6,7 @@ import { advanceShift, advanceShifts, handleEvent, research, runPipeline } from 
 import { emitGameEvent } from "../game/game-bus.js";
 import { EVENT_TYPE_LABEL } from "../game/types.js";
 import { TECH_TREE, TECH_NODE, TECH_CATEGORY_LABEL, nodeStatus } from "../game/tech.js";
-import { dashboardSummary } from "./views.js";
+import { dashboardSummary, shiftReportSummary } from "./views.js";
 
 export const viewDashboardTool: ToolDefinition = {
   name: "factory_view_dashboard",
@@ -16,6 +16,27 @@ export const viewDashboardTool: ToolDefinition = {
   execute: async (_args, context) => {
     const state = getGameState(context.userId);
     return dashboardSummary(state);
+  },
+};
+
+export const factoryShiftReportTool: ToolDefinition = {
+  name: "factory_shift_report",
+  description:
+    "查看最近 N 个班次的班报：交付回款、采购/维修/加急/逾期/研发支出（估算）、完成工序数、触发事件数、当前快照（现金/声誉/库存/在产）。只读。" +
+    "用于回答「最近收支如何/这班赚没赚/经营状况」。支出为日志估算（返回里标 estimate），不含每班固定工资开支；不做利润核算（无单订单成本账）。",
+  parameters: z.object({
+    lastShifts: z
+      .number()
+      .int()
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("统计最近几个班次，默认 6，最多 20"),
+  }),
+  readonly: true,
+  execute: async (args, context) => {
+    const state = getGameState(context.userId);
+    return shiftReportSummary(state, args.lastShifts ?? 6);
   },
 };
 

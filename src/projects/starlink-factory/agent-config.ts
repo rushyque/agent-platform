@@ -3,6 +3,8 @@
 import type { AgentConfig } from "../../types/agent-config.js";
 import { factoryTools } from "./tools/index.js";
 import { buildFactoryPrompt } from "./prompts.js";
+import { factoryStateSummary } from "./observe-state.js";
+import { getGameState } from "./game/state-store.js";
 
 export const starlinkFactoryAgentConfig: AgentConfig = {
   agentId: "starlink_factory",
@@ -14,6 +16,10 @@ export const starlinkFactoryAgentConfig: AgentConfig = {
     role: "factory_manager",
     name: "生产调度经理",
     factoryName: "星联精密 · PET吹瓶模智能工厂（佛山）",
+    // 供 coreTools.observeState 调用：看全局现状（含即将逾期订单，dashboard 里没有）
+    getState: (ctx: any, focus?: string) => factoryStateSummary(ctx.userId, focus),
+    // 供 coreTools.now 调用：把当前班次作为业务周期返回
+    formatTime: (ctx: any) => `第 ${getGameState(ctx.userId).shift} 班次`,
   }),
   tools: factoryTools,
   buildSystemPrompt: ({ context }) => buildFactoryPrompt(context),
