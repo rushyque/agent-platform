@@ -53,8 +53,11 @@ if (!existsSync(resolve(CONSOLE, "node_modules"))) {
 // 3) 构建 console SPA（保证 /console 最新）
 run("npm", ["run", "build"], CONSOLE);
 
-// 4) 生产模式先 tsc
-if (PROD) run("npm", ["run", "build"]);
+// 4) 生产模式先 tsc + prisma generate（确保 Prisma client/引擎最新）
+if (PROD) {
+  run("npm", ["run", "build"]);
+  run("npm", ["run", "db:generate"]);
+}
 
 // 5) 启动中台（前台，Ctrl+C 退出）
 const env = readEnv();

@@ -12,6 +12,12 @@
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "set RUNTIME_PORT=9877&&set RUNTIME_HOST=127.0.0.1&&npx tsx watch src/server.ts"],
       "port": 9877
+    },
+    {
+      "name": "factory-game",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["D:/code/vue/factory game/node_modules/vite/bin/vite.js", "D:/code/vue/factory game", "--port", "5173", "--strictPort"],
+      "port": 5173
     }
   ]
 }
