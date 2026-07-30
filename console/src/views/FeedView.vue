@@ -6,16 +6,16 @@ import RunsPanel from "../components/RunsPanel.vue";
 import RunTrace from "../components/RunTrace.vue";
 import ConnectionsPanel from "../components/ConnectionsPanel.vue";
 
-const { state } = useObserveStream();
+const { state, clear } = useObserveStream();
 const selectedRun = ref<string | null>(null);
 </script>
 
 <template>
   <div class="feed">
-    <div class="pane"><LogsPanel :logs="state.logs" /></div>
-    <div class="pane narrow"><RunsPanel :runs="state.runs" :selected="selectedRun" @select="(id) => (selectedRun = id)" /></div>
+    <div class="pane"><LogsPanel :logs="state.logs" @clear="() => clear('logs')" /></div>
+    <div class="pane narrow"><RunsPanel :runs="state.runs" :selected="selectedRun" @select="(id) => (selectedRun = id)" @clear="() => clear('runs')" /></div>
     <div class="pane"><RunTrace :runs="state.runs" :run-id="selectedRun" /></div>
-    <div class="pane narrow"><ConnectionsPanel :connections="state.connections" /></div>
+    <div class="pane narrow"><ConnectionsPanel :connections="state.connections" @clear="() => clear('connections')" /></div>
   </div>
 </template>
 

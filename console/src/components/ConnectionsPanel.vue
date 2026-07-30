@@ -3,6 +3,7 @@ import { computed } from "vue";
 import type { Envelope } from "../composables/useObserveStream";
 
 const props = defineProps<{ connections: Envelope[] }>();
+const emit = defineEmits<{ (e: "clear"): void }>();
 
 const items = computed(() => {
   const map = new Map<string, any>();
@@ -30,6 +31,7 @@ function ts(t: number): string {
     <div class="head row">
       <span class="muted">连接</span>
       <span class="tag">{{ items.length }}</span>
+      <button class="btn-mini" @click="emit('clear')" title="清空连接">清空</button>
     </div>
     <div class="scroll list">
       <div v-for="it in items" :key="it.reqId" class="ritem">
@@ -61,4 +63,6 @@ function ts(t: number): string {
 .path { word-break: break-all; }
 .small { font-size: 11px; }
 .empty { padding: 16px 8px; line-height: 1.6; }
+.btn-mini { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 1px 6px; font-size: 11px; font-family: var(--mono); cursor: pointer; border-radius: 3px; }
+.btn-mini:hover { color: var(--text); border-color: var(--accent); }
 </style>

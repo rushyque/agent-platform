@@ -3,7 +3,7 @@ import { computed } from "vue";
 import type { Envelope } from "../composables/useObserveStream";
 
 const props = defineProps<{ runs: Envelope[]; selected: string | null }>();
-const emit = defineEmits<{ (e: "select", id: string): void }>();
+const emit = defineEmits<{ (e: "select", id: string): void; (e: "clear"): void }>();
 
 const runList = computed(() => {
   const map = new Map<string, any>();
@@ -40,6 +40,7 @@ function ts(t: number): string {
     <div class="head row">
       <span class="muted">Runs</span>
       <span class="tag">{{ runList.length }}</span>
+      <button class="btn-mini" @click="emit('clear')" title="清空 runs">清空</button>
     </div>
     <div class="scroll list">
       <div
@@ -74,4 +75,6 @@ function ts(t: number): string {
 .ritem.active { background: #1c2735; border-left: 2px solid var(--accent); }
 .small { font-size: 11px; }
 .empty { padding: 16px 8px; line-height: 1.6; }
+.btn-mini { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 1px 6px; font-size: 11px; font-family: var(--mono); cursor: pointer; border-radius: 3px; }
+.btn-mini:hover { color: var(--text); border-color: var(--accent); }
 </style>

@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick } from "vue";
 import type { Envelope } from "../composables/useObserveStream";
 
 const props = defineProps<{ logs: Envelope[] }>();
+const emit = defineEmits<{ (e: "clear"): void }>();
 const filter = ref("");
 const levelFilter = ref("");
 const container = ref<HTMLElement | null>(null);
@@ -58,6 +59,7 @@ function ts(t: number): string {
         <option value="error">error</option>
       </select>
       <span class="tag">{{ filtered.length }}</span>
+      <button class="btn-mini" @click="emit('clear')" title="清空日志">清空</button>
     </div>
     <div ref="container" class="loglist scroll" @scroll="onScroll">
       <div v-for="(e, i) in filtered" :key="i" class="logline" :class="e.payload.level">
@@ -87,4 +89,6 @@ function ts(t: number): string {
 .data { margin-left: auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .small { font-size: 11px; }
 .empty { padding: 16px 8px; }
+.btn-mini { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 1px 6px; font-size: 11px; font-family: var(--mono); cursor: pointer; border-radius: 3px; }
+.btn-mini:hover { color: var(--text); border-color: var(--accent); }
 </style>
