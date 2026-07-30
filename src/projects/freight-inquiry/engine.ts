@@ -245,11 +245,12 @@ export function applyNegotiationToParsed(userId: string, inquiryId: string, forw
   return { ok: true, message: '已更新', data: latest.truthQuote };
 }
 
-// ---------- 审核通知 ----------
+// ---------- 审核通知（送审 → reviewing） ----------
 export function notifyManagerReview(userId: string, inquiryId: string, managerEmail: string): OpResult<Email> {
   const world = getWorld(userId);
   const iq = findInquiry(world, inquiryId);
   if (!iq) return { ok: false, message: `未找到询价 ${inquiryId}` };
+  if (iq.status !== 'evaluated') return { ok: false, message: `需先完成 AI 评估再送审（当前状态 ${iq.status}）` };
   const email: Email = {
     id: nextEmailId(),
     inquiryId,
@@ -268,9 +269,38 @@ export function notifyManagerReview(userId: string, inquiryId: string, managerEm
     receivedAt: new Date().toISOString(),
   };
   world.emails.push(email);
-  log(world, `${inquiryId} 审核通知发送给 ${managerEmail}`);
+  iq.status = 'reviewing';
+  log(world, `${inquiryId} 审核通知发送给 ${managerEmail}，进入待审核`);
   emitFreightWorld(userId, '审核通知已发送');
-  return { ok: true, message: '审核通知已发送', data: email };
+  return { ok: true, message: '审核通知已发送，等待销售管理审核', data: email };
+}
+
+// ---------- 销售管理：审核决策（reviewing → evaluated，留痕） ----------
+// approve/reject 后都回到 evaluated 可操作态，由 reviewNote 区分意图：
+//  - approve：审核通过，可继续 record_decision
+//  - reject：驳回（需重新议价/评估），reviewNote 记原因
+export function managerReview(
+  userId: string,
+  inquiryId: string,
+  decision: 'approve' | 'reject',
+  note: string,
+): OpResult {
+  const world = getWorld(userId);
+  const iq = findInquiry(world, inquiryId);
+  if (!iq) return { ok: false, message: `未找到询价 ${inquiryId}` };
+  if (iq.status !== 'reviewing') return { ok: false, message: `${inquiryId} 当前不在待审核状态（${iq.status}），无法审核` };
+  iq.reviewNote = decision === 'approve' ? `审核通过${note ? '：' + note : ''}` : `驳回${note ? '：' + note : ''}`;
+  iq.reviewedAt = new Date().toISOString();
+  iq.status = 'evaluated';
+  log(world, `${inquiryId} 销售管理${decision === 'approve' ? '审核通过' : '驳回'}（${note || '无备注'}）`);
+  emitFreightWorld(userId, decision === 'approve' ? '审核通过' : '审核驳回');
+  return {
+    ok: true,
+    message:
+      decision === 'approve'
+        ? `${inquiryId} 审核通过，可 record_decision 选定货代`
+        : `${inquiryId} 已驳回，可重新 evaluate_quotes 或 negotiate_with_forwarder`,
+  };
 }
 
 // ---------- 7. 销售管理：决策 ----------

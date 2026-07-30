@@ -39,13 +39,22 @@ export const PREFERENCE_HINT: Record<Preference, string> = {
   service_first: '服务优先：优先大航司、口碑好、评分高（rating）的货代；价格可适当放宽。',
 };
 
-export type InquiryStatus = 'draft' | 'sent' | 'quoting' | 'evaluated' | 'decided' | 'confirmed';
+// reviewed 标志审核回路：notify 送审 → reviewing；approve/reject 后回 evaluated，由 reviewNote 区分意图
+export type InquiryStatus =
+  | 'draft'
+  | 'sent'
+  | 'quoting'
+  | 'evaluated'
+  | 'reviewing'
+  | 'decided'
+  | 'confirmed';
 
 export const INQUIRY_STATUS_LABEL: Record<InquiryStatus, string> = {
   draft: '草稿',
   sent: '已发询价',
   quoting: '报价中',
   evaluated: '已评估',
+  reviewing: '待审核',
   decided: '已决策',
   confirmed: '已确认',
 };
@@ -55,6 +64,7 @@ export const INQUIRY_STATUS_ICON: Record<InquiryStatus, string> = {
   sent: '📤',
   quoting: '💬',
   evaluated: '🧠',
+  reviewing: '🔍',
   decided: '✅',
   confirmed: '🏁',
 };
@@ -78,6 +88,9 @@ export interface CargoInquiry {
   preference: Preference;
   status: InquiryStatus;
   selectedForwarderId?: string;
+  // 审核回路留痕：reviewing 态期间为空；approve/reject 后写入，status 回到 evaluated
+  reviewNote?: string; // 如 '审核通过' / '驳回：价格偏高，需重新议价'
+  reviewedAt?: string;
   createdAt: string;
 }
 

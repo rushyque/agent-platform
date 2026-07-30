@@ -248,7 +248,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
 const uuid = () => "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,c=>{const r=Math.random()*16|0;return (c=="x"?r:(r&3|8)).toString(16)});
 
-const STATUS_LABEL = {draft:"草稿",sent:"已发询价",quoting:"报价中",evaluated:"已评估",decided:"已决策",confirmed:"已确认"};
+const STATUS_LABEL = {draft:"草稿",sent:"已发询价",quoting:"报价中",evaluated:"已评估",reviewing:"待审核",decided:"已决策",confirmed:"已确认"};
 const PREF_LABEL = {price_first:"价格优先",time_first:"时效优先",balanced:"综合平衡",service_first:"服务优先"};
 const STYLE_LABEL = {fast:"急速型",cheap:"低价型",premium:"高端型",steady:"稳健型",regional:"区域专精"};
 const MAIL_LABEL = {inquiry_outbound:"询价",quote_inbound:"报价",negotiation_inbound:"议价",review_notice:"审核",confirm_notice:"确认"};

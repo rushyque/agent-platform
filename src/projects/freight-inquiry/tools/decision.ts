@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { ToolDefinition } from '../../../types/agent-config.js';
 import {
   notifyManagerReview,
+  managerReview,
   negotiate,
   applyNegotiationToParsed,
   recordDecision,
@@ -25,7 +26,32 @@ export const notifyManagerReviewTool: ToolDefinition = {
       ok: true,
       message: res.message,
       email: { to: res.data.to, subject: res.data.subject },
-      hint: '销售管理可查看报价对比表与 AI 推荐，决策后 record_decision。',
+      hint: '销售管理可查看报价对比表与 AI 推荐，审核决策用 review_quotes。',
+    };
+  },
+};
+
+export const reviewQuotesTool: ToolDefinition = {
+  name: 'review_quotes',
+  description:
+    '销售管理对 AI 评估结果做审核决策（approve 通过 / reject 驳回）。必须先 notify_manager_review 进入待审核。' +
+    'approve → 可 record_decision 选定货代；reject → 可重新 evaluate_quotes 或 negotiate_with_forwarder。',
+  parameters: z.object({
+    inquiryId: z.string(),
+    decision: z.enum(['approve', 'reject']).describe("approve=审核通过；reject=驳回"),
+    note: z.string().describe('审核意见/驳回原因，如 "价格偏高，需重新议价" 或 "同意推荐"'),
+  }),
+  execute: async (args, context) => {
+    const res = managerReview(context.userId, args.inquiryId, args.decision, args.note);
+    if (!res.ok) return { ok: false, message: res.message };
+    return {
+      ok: true,
+      message: res.message,
+      decision: args.decision,
+      hint:
+        args.decision === 'approve'
+          ? '下一步：record_decision 选定货代并记录理由。'
+          : '下一步：可 negotiate_with_forwarder 议价或调整偏好后重新 evaluate_quotes。',
     };
   },
 };
