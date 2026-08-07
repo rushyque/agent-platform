@@ -7,7 +7,7 @@ import { CopilotRuntime } from "@copilotkit/runtime";
 import { BuiltInAgent, convertMessagesToVercelAISDKMessages } from "@copilotkit/runtime/v2";
 import { createCopilotNodeListener } from "@copilotkit/runtime/v2/node";
 import { tool, streamText, stepCountIs } from "ai";
-import { createLLMClient } from "./core/llm.js";
+import { createLLMClient, reasoningEffortProviderOptions } from "./core/llm.js";
 import { resolveAgent, getAllAgentIds } from "./core/agent-router.js";
 import { listRuns } from "./persistence/run-store.js";
 import { listThreads } from "./persistence/thread-store.js";
@@ -17,7 +17,13 @@ import { extractToken, verifyToken } from "./core/middleware/auth.js";
 import { selectToolsForRun, createRunHooks } from "./core/middleware/index.js";
 import { handleProjectRoutes } from "./core/http-router.js";
 import { handleBenchRoutes } from "./bench/bench-routes.js";
-import { handleObserveRoutes, logger, runWithCtx, observeBus } from "./observe/index.js";
+import {
+  handleObserveRoutes,
+  logger,
+  logEvent,
+  runWithCtx,
+  observeBus,
+} from "./observe/index.js";
 import { DAGAgent } from "./core/dag/dag-agent.js";
 import { DatabaseAgentRunner } from "./persistence/database-runner.js";
 import { ensureSchema } from "./persistence/db.js";
@@ -42,21 +48,41 @@ function isDbConnectionError(err: unknown): boolean {
 }
 process.on("uncaughtException", (err) => {
   if (isDbConnectionError(err)) {
-    logger.for("DB").error("连接错误已吞并（服务保持运行）", { err: err.message });
+    logEvent({
+      level: "warn",
+      source: "DB",
+      event: "db_connection_error_swallowed",
+      message: "数据库连接错误已吞并，服务保持运行",
+      data: { err },
+    });
     return;
   }
-  logger.for("UncaughtException").error("fatal", {
-    err: err instanceof Error ? err.stack ?? err.message : String(err),
+  logEvent({
+    level: "error",
+    source: "UncaughtException",
+    event: "process_fatal",
+    message: "进程级未捕获异常，即将退出",
+    data: { err },
   });
   process.exit(1);
 });
 process.on("unhandledRejection", (err) => {
   if (isDbConnectionError(err)) {
-    logger.for("DB").error("连接 rejection 已吞并", { err: (err as Error)?.message ?? String(err) });
+    logEvent({
+      level: "warn",
+      source: "DB",
+      event: "db_connection_error_swallowed",
+      message: "数据库连接 rejection 已吞并",
+      data: { err },
+    });
     return;
   }
-  logger.for("UnhandledRejection").error("unhandled", {
-    err: err instanceof Error ? err.stack ?? err.message : String(err),
+  logEvent({
+    level: "error",
+    source: "UnhandledRejection",
+    event: "process_unhandled_rejection",
+    message: "未处理的 Promise rejection",
+    data: { err },
   });
 });
 
@@ -105,13 +131,26 @@ function toAISDKTools(
               observeBus.emit("runs", "run.tool_call", {
                 runId, threadId, agentId, toolName: t.name, args,
               });
+              logEvent({
+                level: "debug",
+                source: "tool",
+                event: "tool_call",
+                message: "工具调用开始",
+                data: { tool: t.name, args },
+              });
               let result: any;
               try {
                 result = await t.execute(args, context);
               } catch (err) {
                 // 工具抛异常 → 统一 error 信封，让前端能区分"真错误(红)"与"业务拒绝 ok:false(琥珀)"
                 const msg = (err as Error)?.message ?? String(err);
-                logger.for("tool").error("threw", { tool: t.name, err: msg });
+                logEvent({
+                  level: "error",
+                  source: "tool",
+                  event: "tool_failed",
+                  message: "工具调用失败",
+                  data: { tool: t.name, err },
+                });
                 observeBus.emit("runs", "run.tool_result", {
                   runId, threadId, agentId, toolName: t.name,
                   execMs: Date.now() - t0, summary: `工具执行异常: ${msg}`, ref: null,
@@ -133,11 +172,18 @@ function toAISDKTools(
               } catch (err) {
                 logger.for("artifact").error("insert failed, fallback to inline", { tool: t.name, err: (err as Error).message });
               }
-              logger.for("tool").info("exec", {
-                tool: t.name, execMs,
-                resultChars: JSON.stringify(result).length,
-                summaryChars: summary.length,
-                stored: !!ref,
+              logEvent({
+                level: "info",
+                source: "tool",
+                event: "tool_result",
+                message: "工具调用完成",
+                data: {
+                  tool: t.name,
+                  duration_ms: execMs,
+                  result_chars: JSON.stringify(result).length,
+                  summary_chars: summary.length,
+                  stored: !!ref,
+                },
               });
               observeBus.emit("runs", "run.tool_result", {
                 runId, threadId, agentId, toolName: t.name, execMs, summary, ref,
@@ -192,6 +238,8 @@ const runtime = new CopilotRuntime({
       request.headers.get("Authorization");
 
     const token = extractToken(authHeader);
+    // 端到端 traceId：沿用入口生成的 x-trace-id（若无则容错生成，保证 run 事件也有 traceId）
+    const traceId = request.headers.get("x-trace-id") || randomUUID();
 
     // 2. 解析用户基本信息
     let userId = "anonymous";
@@ -292,7 +340,7 @@ const runtime = new CopilotRuntime({
           // streamText 回调与工具执行可能脱离本续体，故 runs 通道事件一律用下方闭包变量
           // （agentId/input.runId 等）显式传，不依赖 ALS。
           return runWithCtx(
-            { runId: input.runId, threadId: input.threadId, agentId, userId, route: "hermes" },
+            { runId: input.runId, threadId: input.threadId, agentId, userId, traceId, route: "hermes" },
             () => {
           // 意图分类：项目可在 AgentConfig.classifyIntent 自带；缺省 "general"（平台不内置业务关键词）
           const intent = config.classifyIntent
@@ -392,9 +440,25 @@ const runtime = new CopilotRuntime({
             role: context.role ?? "unknown",
             model: config.model ?? settings.DEEPSEEK_MODEL,
           });
+          logEvent({
+            level: "info",
+            source: "run",
+            event: "run_started",
+            message: "run 开始",
+            traceId,
+            data: {
+              intent,
+              route: "hermes",
+              selectedTools: activeTools.map((t) => t.name),
+              totalTools: config.tools.length,
+              role: context.role ?? "unknown",
+              model: config.model ?? settings.DEEPSEEK_MODEL,
+            },
+          });
 
           return streamText({
             model: createLLMClient(config.model, { readonlyTools }),
+            ...reasoningEffortProviderOptions(),
             system: systemPrompt,
             // ai v5 与 CopilotKit 已对齐：ModelMessage[] 直接透传
             messages: messages as any,
@@ -412,6 +476,18 @@ const runtime = new CopilotRuntime({
                 systemPrompt,
                 messages: stepMessages,
                 stepIndex: stepNumber,
+              });
+              logEvent({
+                level: "debug",
+                source: "llm",
+                event: "llm_call",
+                message: "模型调用开始",
+                traceId,
+                data: {
+                  stepIndex: stepNumber,
+                  messageCount: Array.isArray(stepMessages) ? stepMessages.length : 0,
+                  systemPromptChars: systemPrompt.length,
+                },
               });
               return {}; // 纯观察，不覆盖 model/system/messages/toolChoice
             },
@@ -558,7 +634,13 @@ function trackRequest(req: http.IncomingMessage, res: http.ServerResponse, pathn
     pathname === "/inquiry" || pathname.startsWith("/inquiry/");
   if (!interesting) return;
 
-  const reqId = randomUUID();
+  // 端到端 traceId：入口带 x-trace-id 则沿用，否则生成并回写响应头，供 agent 工厂读取对齐。
+  const traceHeader = req.headers["x-trace-id"];
+  const incomingTraceId = Array.isArray(traceHeader) ? traceHeader[0] : traceHeader;
+  const reqId = incomingTraceId || randomUUID();
+  if (!incomingTraceId && !res.headersSent) {
+    res.setHeader("x-trace-id", reqId);
+  }
   const t0 = Date.now();
   const agentMatch = pathname.match(/\/agent\/([^/]+)/);
   const authHeader = (req.headers["authorization"] || req.headers["Authorization"]) as string | undefined;
@@ -579,11 +661,39 @@ function trackRequest(req: http.IncomingMessage, res: http.ServerResponse, pathn
     origin: fromConsole ? "console" : ((req.headers["origin"] || req.headers["referer"]) as string) || undefined,
     ua: (req.headers["user-agent"] as string) || undefined,
   });
+  logEvent({
+    level: "info",
+    source: "request",
+    event: "request_started",
+    message: "请求开始",
+    traceId: reqId,
+    data: {
+      reqId,
+      method: req.method || "GET",
+      path: pathname,
+      agentId: agentMatch?.[1],
+      origin: fromConsole ? "console" : "external",
+    },
+  });
   res.on("finish", () => {
     observeBus.emit("connections", "request.finished", {
       reqId,
       status: res.statusCode,
       durationMs: Date.now() - t0,
+    });
+    logEvent({
+      level: res.statusCode >= 500 ? "error" : "info",
+      source: "request",
+      event: "request_finished",
+      message: "请求完成",
+      traceId: reqId,
+      data: {
+        reqId,
+        path: pathname,
+        method: req.method || "GET",
+        status: res.statusCode,
+        duration_ms: Date.now() - t0,
+      },
     });
   });
 }
@@ -641,7 +751,13 @@ async function main() {
       }
       await listener(req as any, res as any);
     } catch (err) {
-      logger.for("Runtime").error("Request failed", { path: req.url, err: err instanceof Error ? err.stack ?? err.message : String(err) });
+      logEvent({
+        level: "error",
+        source: "Runtime",
+        event: "request_failed",
+        message: "请求处理失败",
+        data: { path: req.url, err },
+      });
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Internal server error", detail: (err as Error).message }));
@@ -650,6 +766,17 @@ async function main() {
   });
 
   server.listen(settings.RUNTIME_PORT, settings.RUNTIME_HOST, () => {
+    logEvent({
+      level: "info",
+      source: "Startup",
+      event: "app_started",
+      message: "服务启动完成",
+      data: {
+        version: "0.1.0",
+        listen: `http://${settings.RUNTIME_HOST}:${settings.RUNTIME_PORT}`,
+        agents: getAllAgentIds(),
+      },
+    });
     logger.for("Startup").info("runtime listening", { url: `http://${settings.RUNTIME_HOST}:${settings.RUNTIME_PORT}` });
     logger.for("Startup").info("LLM", { base: settings.DEEPSEEK_BASE_URL, model: settings.DEEPSEEK_MODEL });
     logger.for("Startup").info("registered agents", { agents: getAllAgentIds() });
@@ -662,6 +789,12 @@ async function main() {
 }
 
 main().catch((err) => {
-  logger.for("Startup").error("fatal", { err: err instanceof Error ? err.stack ?? err.message : String(err) });
+  logEvent({
+    level: "error",
+    source: "Startup",
+    event: "process_fatal",
+    message: "启动失败，进程退出",
+    data: { err },
+  });
   process.exit(1);
 });
