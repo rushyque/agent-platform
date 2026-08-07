@@ -74,37 +74,39 @@ export class DatabaseAgentRunner extends AgentRunner {
     state.subject = nextSubject;
 
     const runAgent = async () => {
-      // 确保 thread 行先于工具产生的 artifact/event 存在（外键父行）。
-      // persist 在 run 结束才 upsertThread，但工具 execute 产生的 artifact 在 run 进行中就落库，
-      // 故此处提前建一次（幂等）；upsertThread 经 safeAppend 不抛、不阻塞流。
-      await upsertThread({
-        id: request.threadId,
-        agentId: request.agent.agentId ?? "default",
-        createdBy: (request.input as any).userId ?? null,
-      });
-      // 计算历史消息 id，用于从 RUN_STARTED 中剔除已见消息，避免重复回放
-      const historicMessageIds = new Set<string>();
+      // 整个函数体置于单一 try 内：任何环节（含 upsertThread / 历史加载 / runAgent 主体）
+      // 抛错时 finally 都释放 thread 锁，避免 "Thread already running" 永久卡死同线程后续 run。
       try {
-        const historicEvents = await getEvents(request.threadId);
-        for (const event of historicEvents) {
-          if ("messageId" in event && typeof event.messageId === "string") {
-            historicMessageIds.add(event.messageId);
+        // 确保 thread 行先于工具产生的 artifact/event 存在（外键父行）。
+        // persist 在 run 结束才 upsertThread，但工具 execute 产生的 artifact 在 run 进行中就落库，
+        // 故此处提前建一次（幂等）；upsertThread 经 safeAppend 不抛、不阻塞流。
+        await upsertThread({
+          id: request.threadId,
+          agentId: request.agent.agentId ?? "default",
+          createdBy: (request.input as any).userId ?? null,
+        });
+        // 计算历史消息 id，用于从 RUN_STARTED 中剔除已见消息，避免重复回放
+        const historicMessageIds = new Set<string>();
+        try {
+          const historicEvents = await getEvents(request.threadId);
+          for (const event of historicEvents) {
+            if ("messageId" in event && typeof event.messageId === "string") {
+              historicMessageIds.add(event.messageId);
+            }
+            if (event.type === EventType.RUN_STARTED) {
+              const messages = (event as any).input?.messages ?? [];
+              for (const message of messages) if (message?.id) historicMessageIds.add(message.id);
+            }
           }
-          if (event.type === EventType.RUN_STARTED) {
-            const messages = (event as any).input?.messages ?? [];
-            for (const message of messages) if (message?.id) historicMessageIds.add(message.id);
-          }
+        } catch (err) {
+          log.error("load history failed", { threadId: request.threadId, err: (err as Error).message });
         }
-      } catch (err) {
-        log.error("load history failed", { threadId: request.threadId, err: (err as Error).message });
-      }
 
-      let lastDeltaTs = 0;
-      let maxGap = 0;
-      let gapsOver100 = 0;
-      let gapsOver200 = 0;
-      let deltaCount = 0;
-      try {
+        let lastDeltaTs = 0;
+        let maxGap = 0;
+        let gapsOver100 = 0;
+        let gapsOver200 = 0;
+        let deltaCount = 0;
         await request.agent.runAgent(request.input, {
           onEvent: ({ event }: { event: BaseEvent }) => {
             if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
