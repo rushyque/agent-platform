@@ -12,7 +12,9 @@ build/
 
 # Local scratch / debug artifacts
 tmp/
+logs/
 *.log
+*.err
 *.sse
 
 # OS files

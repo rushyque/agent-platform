@@ -9,9 +9,18 @@ const envSchema = z.object({
   DEEPSEEK_API_KEY: z.string().optional(),
   DEEPSEEK_MODEL: z.string().optional(),
   DEEPSEEK_BASE_URL: z.string().optional(),
+  // 思考强度：deepseek-v4-flash 网关默认不返回思考体，需 reasoning_effort 触发。
+  // 有效值 none/minimal/low/medium/high/xhigh（GLM 等默认出思考且不认此参数，留空即不传）。
+  REASONING_EFFORT: z.string().optional(),
   GLM_API_KEY: z.string().optional(),
   GLM_MODEL: z.string().optional(),
   GLM_BASE_URL: z.string().optional(),
+  // 运行环境与日志落地（符合《高质量日志规范》§3 公共字段 + §12 落盘/轮转/保留）
+  NODE_ENV: z.string().default("development"),
+  LOG_LEVEL: z.string().default("info"),
+  LOG_DIR: z.string().default("logs"),
+  LOG_RETENTION_DAYS: z.coerce.number().default(30),
+  LOG_MAX_MB: z.coerce.number().default(10),
   RUNTIME_PORT: z.coerce.number().default(9876),
   RUNTIME_HOST: z.string().default("127.0.0.1"),
   DB_HOST: z.string(),
@@ -39,6 +48,8 @@ const __raw = envSchema.parse(process.env);
 const __prefix = (__raw.ACTIVE_MODEL || "deepseek").toUpperCase();
 export const settings = {
   ...__raw,
+  appName: "agent-platform",
+  env: __raw.NODE_ENV,
   DEEPSEEK_API_KEY: (process.env[`${__prefix}_API_KEY`] ?? __raw.DEEPSEEK_API_KEY) as string,
   DEEPSEEK_MODEL: (process.env[`${__prefix}_MODEL`] ?? __raw.DEEPSEEK_MODEL) as string,
   DEEPSEEK_BASE_URL: (process.env[`${__prefix}_BASE_URL`] ?? __raw.DEEPSEEK_BASE_URL) as string,

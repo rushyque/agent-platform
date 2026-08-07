@@ -16,7 +16,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:comment": "tsx scripts/apply-comments.ts"
+     "db:comment": "tsx scripts/apply-comments.ts",
+     "db:annotate": "tsx scripts/annotate-business-tables.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.115",
