@@ -10,6 +10,8 @@ export interface ObservabilityCtx {
   threadId: string;
   agentId: string;
   userId?: string;
+  /** 一次外部触发的全链路 id（规范 §7），来自 HTTP 入口 traceId=reqId */
+  traceId?: string;
   route: "hermes" | "dag";
 }
 

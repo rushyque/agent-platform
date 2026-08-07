@@ -13,12 +13,23 @@ export interface Envelope<T = unknown> {
 }
 
 // ===== logs =====
-export type LogLevel = "debug" | "info" | "warn" | "error";
+export type LogLevel = "debug" | "info" | "warn" | "error" | "fatal";
 
 export interface LogPayload {
   level: LogLevel;
   source: string;
   msg: string;
+  /** 机器聚合主键，小写蛇形（规范 §6）。调用方未显式给定事件名时由 source+level 派生。 */
+  event: string;
+  /** 人类一句话描述，与 msg 同值（规范 §8：message 不带裸数字，数字进 data）。 */
+  message: string;
+  /** 日志格式版本，v1（规范 §3.1）。 */
+  v?: number;
+  /** ISO 8601 UTC（规范 §3.1）。 */
+  ts?: string;
+  app?: string;
+  env?: string;
+  traceId?: string | null;
   data?: Record<string, unknown>;
   runId?: string | null;
   threadId?: string | null;

@@ -6,7 +6,7 @@ import {
   DEFAULT_POLICY,
 } from "../context/index.js";
 import { observeBus } from "../../observe/bus.js";
-import { logger } from "../../observe/logger.js";
+import { logger, logEvent } from "../../observe/logger.js";
 
 // 审计 + token 计费 + 线程滚动摘要钩子。
 // onStepFinish 记每步；onFinish 记总览（agent_runs，DB 挂降级）并把本次对话压进 thread_summary，
@@ -66,6 +66,19 @@ export function createRunHooks(params: RunHooksParams) {
         finishReason,
         stepIndex,
       });
+      logEvent({
+        level: "debug",
+        source: "llm",
+        event: "llm_response",
+        message: "模型调用完成",
+        data: {
+          stepIndex,
+          finishReason,
+          textChars: typeof text === "string" ? text.length : 0,
+          promptTokens: usage?.promptTokens ?? null,
+          completionTokens: usage?.completionTokens ?? null,
+        },
+      });
       logger.for("Audit").info("step", {
         agent: agentId,
         thread: threadId,
@@ -88,6 +101,20 @@ export function createRunHooks(params: RunHooksParams) {
         status: finishReason === "error" ? "error" : "ok",
         durationMs: totalMs,
       });
+      logEvent({
+        level: finishReason === "error" ? "error" : "info",
+        source: "run",
+        event: "run_finished",
+        message: finishReason === "error" ? "run 结束（异常）" : "run 完成",
+        data: {
+          status: finishReason === "error" ? "error" : "ok",
+          duration_ms: totalMs,
+          steps: stepCount,
+          finishReason,
+          promptTokens,
+          completionTokens,
+        },
+      });
       logger.for("Audit").info("run done", {
         agent: agentId,
         thread: threadId,
@@ -98,21 +125,24 @@ export function createRunHooks(params: RunHooksParams) {
         completion: completionTokens ?? "n/a",
       });
 
-      // 线程滚动摘要：上次摘要 + 本次对话 → 新单段，覆写存内存，下次 run 注入 system
-      try {
-        const runText = buildRunText(steps, messages);
-        if (runText.trim()) {
-          const prev = getThreadSummary(threadId);
-          const rolled = await rollupThreadSummary(prev, runText, DEFAULT_POLICY);
-          setThreadSummary(threadId, rolled);
-          logger.for("thread-memory").info("summary rolled", {
-            thread: threadId,
-            chars: rolled.length,
-            prevChars: prev?.length ?? 0,
-          });
-        }
-      } catch (err) {
-        logger.for("thread-memory").error("rollup failed", { err: (err as Error).message });
+      // 线程滚动摘要：上次摘要 + 本次对话 → 新单段，覆写存内存，下次 run 注入 system。
+      // 异步 fire-and-forget：rollup 调 LLM 需 2-4s，不阻塞 run 收尾（用户不再感知"回复完还在转"）。
+      // setThreadSummary 是同步内存写 + 自身异步落库，算完即写入供下次 run 注入。
+      const runText = buildRunText(steps, messages);
+      if (runText.trim()) {
+        const prev = getThreadSummary(threadId);
+        void rollupThreadSummary(prev, runText, DEFAULT_POLICY)
+          .then((rolled) => {
+            setThreadSummary(threadId, rolled);
+            logger.for("thread-memory").info("summary rolled", {
+              thread: threadId,
+              chars: rolled.length,
+              prevChars: prev?.length ?? 0,
+            });
+          })
+          .catch((err) =>
+            logger.for("thread-memory").error("rollup failed", { err: (err as Error).message })
+          );
       }
 
       try {
