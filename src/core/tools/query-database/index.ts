@@ -1,49 +1,126 @@
 import { z } from "zod";
 import type { ToolDefinition, AgentContext } from "../../../types/agent-config.js";
-import { runNL2SQLAgent } from "./nl2sql-agent.js";
 import type { DatabaseBackend } from "./backend.js";
+import { guardSQL } from "./guard.js";
 
-// query_database —— NL→SQL 通用查询工具（只读）。
-// 模型只传自然语言；工具内部：选表 → 生成 SQL → guardSQL → 执行 → 自纠 → trace。
-// 数据来源：项目在 resolveContext 返回 context.database（DatabaseBackend 实例，
-//   如 createMssqlBackend()），或由中台在 P5 据 AgentConfig.database 注入。
+// Data-access primitives (Codex philosophy: give the model fine-grained tools,
+// let it explore and compose freely instead of a black-box sub-agent).
 //
-// 设计理念（见 .claude/plans/中台通用工具层.md）：
-//   - 能力原语：能查任意库数据，不是某个业务的固定步骤。
-//   - 结构化事实：返回 {rows, sql, explanation, trace}，不写自然语言总结。
-//   - 只读：readonly=true，结果不进折叠候选；guardSQL 硬拦写操作。
-export const queryDatabaseTool: ToolDefinition = {
-  name: "query_database",
+// Three tools replace the old query_database NL2SQL sub-agent:
+//   list_tables    -- "what tables exist?" (with row counts + descriptions)
+//   describe_table -- "what columns does table X have?" (with descriptions)
+//   run_sql        -- "run this SELECT" (guardSQL-enforced read-only)
+//
+// The model drives the exploration loop itself: browse tables, pick relevant ones,
+// write SQL, see errors, fix and retry. Semantic annotations (MS_Description) flow
+// through from the backend so the model gets business-level column literacy.
+
+function getBackend(context: AgentContext): DatabaseBackend | undefined {
+  return (context as any).database as DatabaseBackend | undefined;
+}
+
+// 1. list_tables
+export const listTablesTool: ToolDefinition = {
+  name: "list_tables",
   description:
-    "用自然语言查询数据库：自动选表→生成并执行只读 SQL→失败自纠→返回行数据+SQL+解释+trace。" +
-    "用于查任意业务数据（订单/库存/客户/统计等）。只读，绝不修改数据；复杂统计也可用（自动 GROUP BY/聚合）。" +
-    "已能用专用工具（如 observe_state 看运行态快照）查的，优先用专用工具，不要用本工具。",
+    "List all database tables with row counts and business descriptions. " +
+    "Use this FIRST to understand what data is available before writing any SQL. " +
+    "Returns table name, approximate row count, and description (if annotated).",
+  parameters: z.object({}),
+  readonly: true,
+  execute: async (_args: any, context: AgentContext) => {
+    const backend = getBackend(context);
+    if (!backend) {
+      return { ok: false, error: "No database backend configured." };
+    }
+    const tables = await backend.listTables();
+    return {
+      ok: true,
+      count: tables.length,
+      tables: tables.map((t) => ({
+        name: t.name,
+        rows: t.rowCount,
+        description: t.description,
+      })),
+    };
+  },
+};
+
+// 2. describe_table
+export const describeTableTool: ToolDefinition = {
+  name: "describe_table",
+  description:
+    "Show column definitions for a specific table (name, type, nullable, business description). " +
+    "Use this after list_tables to understand a table's structure before writing SQL. " +
+    "Column descriptions carry business semantics -- read them to know which columns are relevant.",
   parameters: z.object({
-    question: z
-      .string()
-      .describe("要查询的问题，自然语言。例：最近10笔销售订单 / 销售额最高的5个客户"),
+    tableName: z.string().describe("Table name (exact, from list_tables output)"),
+  }),
+  readonly: true,
+  execute: async (args: any, context: AgentContext) => {
+    const backend = getBackend(context);
+    if (!backend) {
+      return { ok: false, error: "No database backend configured." };
+    }
+    const schema = await backend.describeTable(args.tableName);
+    return {
+      ok: true,
+      table: schema.name,
+      description: schema.description,
+      columns: schema.columns.map((c) => ({
+        name: c.name,
+        type: c.dataType,
+        nullable: c.nullable,
+        description: c.description,
+      })),
+    };
+  },
+};
+
+// 3. run_sql -- read-only, guardSQL-enforced
+export const runSqlTool: ToolDefinition = {
+  name: "run_sql",
+  description:
+    "Execute a read-only SQL query (SELECT or WITH/CTE only). Write operations are blocked. " +
+    "Use list_tables + describe_table first to understand the schema, then write precise SQL here. " +
+    "If the query errors, read the error message and fix the SQL -- you are in full control.",
+  parameters: z.object({
+    sql: z.string().describe("MSSQL read-only SELECT query (use TOP N to limit rows)"),
     limit: z
       .number()
       .int()
       .positive()
       .max(500)
       .optional()
-      .describe("返回行数上限，默认 50"),
+      .describe("Row cap (default 50, max 500). Applied even if you forget TOP."),
   }),
   readonly: true,
   execute: async (args: any, context: AgentContext) => {
-    const backend = (context as any).database as DatabaseBackend | undefined;
+    const backend = getBackend(context);
     if (!backend) {
-      return {
-        ok: false,
-        error:
-          "未配置数据库后端：需在 resolveContext 返回 context.database（如 createMssqlBackend()），或在 AgentConfig.database 提供。",
-      };
+      return { ok: false, error: "No database backend configured." };
     }
-    return runNL2SQLAgent({
-      question: args.question,
-      backend,
-      limit: args.limit,
-    });
+    const sqlText = String(args.sql || "");
+    // Safety gate: reject anything that isn't a read-only SELECT/WITH
+    const guard = guardSQL(sqlText);
+    if (!guard.ok) {
+      return { ok: false, error: guard.reason, sql: sqlText };
+    }
+    try {
+      const result = await backend.executeQuery(sqlText, args.limit);
+      return {
+        ok: true,
+        columns: result.columns,
+        rows: result.rows,
+        truncated: result.truncated,
+        rowCount: result.rows.length,
+      };
+    } catch (e) {
+ // Surface the raw DB error so the model can self-correct
+      return { ok: false, error: (e as Error).message, sql: sqlText };
+    }
   },
 };
+
+// Convenience: all three primitives as an array
+export const dataAccessTools: ToolDefinition[] = [listTablesTool, describeTableTool, runSqlTool];

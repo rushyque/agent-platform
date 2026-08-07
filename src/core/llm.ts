@@ -4,6 +4,16 @@ import { settings } from "../config/settings.js";
 import { createCompactionMiddleware } from "./context/compactor.js";
 import { logger } from "../observe/logger.js";
 
+// 把 openai 推理强度（reasoning_effort）拼成 streamText 的 providerOptions 片段。
+// deepseek-v4-flash 网关默认不出思考体，须显式传该参数触发；GLM 不认此参数，留空即不传。
+// 返回空对象时可直接用 ... 展开，避免给全部调用方再加条件判断。
+export function reasoningEffortProviderOptions(): Record<string, unknown> {
+  const effort = settings.REASONING_EFFORT;
+  return effort && effort !== "none"
+    ? { providerOptions: { openai: { reasoningEffort: effort } } }
+    : {};
+}
+
 // DeepSeek Reasoning 中间件
 // 从 DeepSeek 的 raw chunk 中提取 reasoning_content 字段，
 // 注入为标准 AI SDK reasoning-* 流事件（低层级 doStream 流）。
@@ -47,8 +57,11 @@ export const deepseekReasoningMiddleware = {
                 ? JSON.parse(chunk.rawValue)
                 : chunk.rawValue;
             const delta = raw?.choices?.[0]?.delta;
+            // DeepSeek 官方 / GLM 走 reasoning_content；本地 vLLM 网关(deepseekv4flash)走 reasoning，
+            // 两者都读，否则该网关的思考体会静默丢失。
+            const reasoningPiece = delta?.reasoning_content ?? delta?.reasoning;
 
-            if (delta?.reasoning_content) {
+            if (reasoningPiece) {
               if (!reasoningOpen) {
                 reasoningOpen = true;
                 controller.enqueue({ type: "reasoning-start", id: reasoningId });
@@ -56,7 +69,7 @@ export const deepseekReasoningMiddleware = {
               controller.enqueue({
                 type: "reasoning-delta",
                 id: reasoningId,
-                delta: delta.reasoning_content,
+                delta: reasoningPiece,
               });
             } else if (reasoningOpen && (delta?.content || raw?.choices?.[0]?.finish_reason)) {
               controller.enqueue({ type: "reasoning-end", id: reasoningId });

@@ -6,15 +6,16 @@ import type {
   ColumnSchema,
 } from "../query-database/backend.js";
 
-// 中台附赠的默认 MSSQL 适配器 —— 复用 persistence/db.ts 的连接池（连 ai_platform_db）。
-// 项目在 AgentConfig.database 或 resolveContext 里 createMssqlBackend() 即开箱可用。
+// MSSQL adapter -- reads MS_Description (semantic annotations) via sys.extended_properties.
+// listTables/describeTable now return business-level descriptions alongside column metadata,
+// giving the model real "database literacy" instead of raw column names.
 
 export interface MssqlBackendOptions {
-  /** 白名单：只暴露这些表（大小写不敏感）。缺省=全部用户表。 */
+  /** Whitelist: only expose these tables (case-insensitive). Default = all user tables. */
   includeTables?: string[];
-  /** 黑名单：排除敏感表。 */
+  /** Blacklist: exclude sensitive tables. */
   excludeTables?: string[];
-  /** 抽样/查询默认行数上限。默认 50。 */
+  /** Default row cap for sampling/queries. Default 50. */
   defaultLimit?: number;
 }
 
@@ -50,14 +51,24 @@ export function createMssqlBackend(opts: MssqlBackendOptions = {}): DatabaseBack
                  FROM sys.dm_db_partition_stats ps
                  WHERE ps.object_id = OBJECT_ID(tbl.TABLE_SCHEMA + '.' + tbl.TABLE_NAME)
                    AND ps.index_id IN (0, 1)
-               ), 0) AS row_count
+               ), 0) AS row_count,
+               CAST(ISNULL((
+                 SELECT ep.value FROM sys.extended_properties ep
+                 WHERE ep.major_id = OBJECT_ID(tbl.TABLE_SCHEMA + '.' + tbl.TABLE_NAME)
+                   AND ep.minor_id = 0 AND ep.name = 'MS_Description'
+               ), '') AS NVARCHAR(MAX)) AS tbl_comment
         FROM INFORMATION_SCHEMA.TABLES tbl
         WHERE tbl.TABLE_TYPE = 'BASE TABLE'
         ORDER BY tbl.TABLE_NAME
       `);
       return (res.recordset as any[])
         .filter((r) => allow(r.name))
-        .map((r) => ({ name: r.name, rowCount: Number(r.row_count) || 0, columns: [] }));
+        .map((r) => ({
+          name: r.name,
+          rowCount: Number(r.row_count) || 0,
+          description: r.tbl_comment || undefined,
+          columns: [],
+        }));
     },
 
     async describeTable(tableName: string): Promise<TableSchema> {
@@ -66,22 +77,42 @@ export function createMssqlBackend(opts: MssqlBackendOptions = {}): DatabaseBack
         .request()
         .input("tn", sql.NVarChar, tableName)
         .query(`
-          SELECT COLUMN_NAME AS name,
-                 DATA_TYPE AS dt,
-                 CHARACTER_MAXIMUM_LENGTH AS len,
-                 NUMERIC_PRECISION AS prec,
-                 IS_NULLABLE AS nullable
-          FROM INFORMATION_SCHEMA.COLUMNS
-          WHERE TABLE_NAME = @tn
-          ORDER BY ORDINAL_POSITION
+          SELECT c.COLUMN_NAME AS name,
+                 c.DATA_TYPE AS dt,
+                 c.CHARACTER_MAXIMUM_LENGTH AS len,
+                 c.NUMERIC_PRECISION AS prec,
+                 c.IS_NULLABLE AS nullable,
+                 CAST(ISNULL((
+                   SELECT ep.value FROM sys.extended_properties ep
+                   WHERE ep.major_id = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                     AND ep.minor_id = c.ORDINAL_POSITION
+                     AND ep.name = 'MS_Description'
+                 ), '') AS NVARCHAR(MAX)) AS col_comment,
+                 CAST(ISNULL((
+                   SELECT ep.value FROM sys.extended_properties ep
+                   WHERE ep.major_id = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                     AND ep.minor_id = 0
+                     AND ep.name = 'MS_Description'
+                 ), '') AS NVARCHAR(MAX)) AS tbl_comment
+          FROM INFORMATION_SCHEMA.COLUMNS c
+          WHERE c.TABLE_NAME = @tn
+          ORDER BY c.ORDINAL_POSITION
         `);
-      const columns: ColumnSchema[] = (res.recordset as any[]).map((r) => {
+      const rows = res.recordset as any[];
+      if (rows.length === 0) return { name: tableName, columns: [] };
+      const tableDesc = rows[0].tbl_comment || undefined;
+      const columns: ColumnSchema[] = rows.map((r) => {
         let dataType: string = r.dt;
         if (r.len != null) dataType += `(${r.len === -1 ? "MAX" : r.len})`;
         else if (r.prec != null) dataType += `(${r.prec})`;
-        return { name: r.name, dataType, nullable: r.nullable === "YES" };
+        return {
+          name: r.name,
+          dataType,
+          nullable: r.nullable === "YES",
+          description: r.col_comment || undefined,
+        };
       });
-      return { name: tableName, columns };
+      return { name: tableName, description: tableDesc, columns };
     },
 
     async sampleRows(tableName: string, limit?: number): Promise<QueryResult> {
@@ -97,7 +128,6 @@ export function createMssqlBackend(opts: MssqlBackendOptions = {}): DatabaseBack
     async executeQuery(sqlText: string, limit?: number): Promise<QueryResult> {
       const cap = Math.min(limit ?? defaultLimit, 500);
       const pool = await getPool();
-      // SET ROWCOUNT 兜底行数（即使模型漏写 TOP 也限流）；执行后复位，避免污染连接后续查询。
       const res = await pool
         .request()
         .query(`SET ROWCOUNT ${cap}; ${sqlText}; SET ROWCOUNT 0;`);

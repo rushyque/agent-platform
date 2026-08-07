@@ -13,6 +13,7 @@ import { insertArtifact, summarizeToolResult } from "../context/artifact-store.j
 import { DEFAULT_POLICY } from "../context/policy.js";
 import { observeBus } from "../../observe/bus.js";
 import { logger } from "../../observe/logger.js";
+import { reasoningEffortProviderOptions } from "../llm.js";
 
 // DAG 执行上下文
 export interface DAGExecutionContext {
@@ -223,6 +224,7 @@ async function executeLLMStep(
 
   const result = streamText({
     model: ctx.createModel(),
+    ...reasoningEffortProviderOptions(),
     system,
     messages: ctx.messages as any,
     abortSignal: ctx.abortSignal,

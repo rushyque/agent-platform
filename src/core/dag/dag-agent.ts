@@ -10,6 +10,7 @@ import type {
 } from "../../types/agent-config.js";
 import { executeDAG } from "./dag-executor.js";
 import { observeBus } from "../../observe/bus.js";
+import { runWithCtx, logEvent } from "../../observe/index.js";
 
 export interface DAGAgentConfig {
   agentId: string;
@@ -45,44 +46,63 @@ export class DAGAgent extends AbstractAgent {
     return new Observable<BaseEvent>((subscriber) => {
       const emit = (event: BaseEvent) => subscriber.next(event);
 
-      const run = async () => {
-        const startedAt = Date.now();
-        try { this.onRunStartFn?.(input); } catch { /* 调试钩子，永不阻断 */ }
-        observeBus.emit("runs", "run.started", {
-          runId: input.runId,
-          threadId: input.threadId,
-          agentId: this.agentId ?? "",
-          route: "dag",
-        });
-        emit({
-          type: EventType.RUN_STARTED,
-          threadId: input.threadId,
-          runId: input.runId,
-          input,
-        } as any);
+      const run = () =>
+        runWithCtx(
+          { runId: input.runId, threadId: input.threadId, agentId: this.agentId ?? "", route: "dag" },
+          async () => {
+            const startedAt = Date.now();
+            try { this.onRunStartFn?.(input); } catch { /* 调试钩子，永不阻断 */ }
+            observeBus.emit("runs", "run.started", {
+              runId: input.runId,
+              threadId: input.threadId,
+              agentId: this.agentId ?? "",
+              route: "dag",
+            });
+            logEvent({
+              level: "info",
+              source: "run",
+              event: "run_started",
+              message: "run 开始",
+              data: { route: "dag" },
+            });
+            emit({
+              type: EventType.RUN_STARTED,
+              threadId: input.threadId,
+              runId: input.runId,
+              input,
+            } as any);
 
-        await executeDAG(this.dagDefinition, {
-          threadId: input.threadId,
-          runId: input.runId,
-          agentId: this.agentId ?? "",
-          messages: input.messages,
-          context: this.context,
-          tools: this.tools,
-          createModel: this.createModelFn,
-          emit,
-          abortSignal: (input as any).abortSignal,
-        });
+            await executeDAG(this.dagDefinition, {
+              threadId: input.threadId,
+              runId: input.runId,
+              agentId: this.agentId ?? "",
+              messages: input.messages,
+              context: this.context,
+              tools: this.tools,
+              createModel: this.createModelFn,
+              emit,
+              abortSignal: (input as any).abortSignal,
+            });
 
-        observeBus.emit("runs", "run.finished", {
-          runId: input.runId,
-          threadId: input.threadId,
-          agentId: this.agentId ?? "",
-          status: "ok",
-          durationMs: Date.now() - startedAt,
-        });
-        emit({ type: EventType.RUN_FINISHED, threadId: input.threadId, runId: input.runId } as any);
-        subscriber.complete();
-      };
+            const durationMs = Date.now() - startedAt;
+            observeBus.emit("runs", "run.finished", {
+              runId: input.runId,
+              threadId: input.threadId,
+              agentId: this.agentId ?? "",
+              status: "ok",
+              durationMs,
+            });
+            logEvent({
+              level: "info",
+              source: "run",
+              event: "run_finished",
+              message: "run 完成",
+              data: { status: "ok", duration_ms: durationMs },
+            });
+            emit({ type: EventType.RUN_FINISHED, threadId: input.threadId, runId: input.runId } as any);
+            subscriber.complete();
+          }
+        );
 
       run().catch((err) => {
         // executeDAG 已发射 RUN_ERROR；此处兜底确保有终止事件并 complete
@@ -94,6 +114,13 @@ export class DAGAgent extends AbstractAgent {
           status: "error",
           durationMs: 0,
           message,
+        });
+        logEvent({
+          level: "error",
+          source: "run",
+          event: "run_failed",
+          message: "run 兜底失败",
+          data: { status: "error", err: message },
         });
         emit({
           type: EventType.RUN_ERROR,
