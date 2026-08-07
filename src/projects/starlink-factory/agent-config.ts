@@ -19,8 +19,19 @@ export const starlinkFactoryAgentConfig: AgentConfig = {
     // 供 coreTools.observeState 调用：看全局现状（含即将逾期订单，dashboard 里没有）
     getState: (ctx: any, focus?: string) => factoryStateSummary(ctx.userId, focus),
     // 供 coreTools.now 调用：把当前班次作为业务周期返回
-    formatTime: (ctx: any) => `第 ${getGameState(ctx.userId).shift} 班次`,
-  }),
+   formatTime: (ctx: any) => `第 ${getGameState(ctx.userId).shift} 班次`,
+    // 供 coreTools.guideUser 校验目标 + 提供可读标签（前端 window.AI_GUIDE_MAP 对应 selector）
+    domMap: {
+      workshop: "车间设备看板",
+      pipeline: "订单流水线",
+      events: "待处理事件",
+      tech: "科技研发",
+      log: "工厂日志",
+      orders: "订单操作",
+      kpi: "指标看板",
+      purchase: "采购钢料",
+    },
+ }),
   tools: factoryTools,
   buildSystemPrompt: ({ context }) => buildFactoryPrompt(context),
 };

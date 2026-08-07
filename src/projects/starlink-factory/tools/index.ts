@@ -1,76 +1,21 @@
-// 工具聚合：导出星联模具工厂的全部工具与列表。
+// Tool aggregation: 4 resource-based business tools + coreTools.
+// Business tools reduced from 22 to 4 via mode dispatch.
 import type { ToolDefinition } from "../../../types/agent-config.js";
 import { coreTools } from "../../../core/tools/index.js";
-import { listOrdersTool, orderDetailTool, acceptInquiryTool, deliverOrderTool } from "./orders.js";
-import { startDesignTool, scheduleJobTool, unscheduleJobTool, runTrialTool } from "./production.js";
-import {
-  viewWorkshopTool,
-  viewScheduleTool,
-  viewInventoryTool,
-  purchaseMaterialTool,
-} from "./workshop.js";
-import {
-  viewDashboardTool,
-  factoryShiftReportTool,
-  advanceShiftTool,
-  advanceShiftsTool,
-  runPipelineTool,
-  listEventsTool,
-  handleEventTool,
-  listTechTool,
-  researchTool,
-  resetGameTool,
-} from "./ops.js";
+import { orderTool, MOLD_LABEL } from "./orders.js";
+import { productionTool } from "./production.js";
+import { workshopTool } from "./workshop.js";
+import { factoryTool } from "./ops.js";
 
-export {
-  listOrdersTool,
-  orderDetailTool,
-  acceptInquiryTool,
-  deliverOrderTool,
-  startDesignTool,
-  scheduleJobTool,
-  unscheduleJobTool,
-  runTrialTool,
-  viewWorkshopTool,
-  viewScheduleTool,
-  viewInventoryTool,
-  purchaseMaterialTool,
-  viewDashboardTool,
-  factoryShiftReportTool,
-  advanceShiftTool,
-  advanceShiftsTool,
-  runPipelineTool,
-  listEventsTool,
-  handleEventTool,
-  listTechTool,
-  researchTool,
-  resetGameTool,
-};
+export { orderTool, productionTool, workshopTool, factoryTool, MOLD_LABEL };
 
 export const factoryTools: ToolDefinition[] = [
-  viewDashboardTool,
-  factoryShiftReportTool,
-  listOrdersTool,
-  orderDetailTool,
-  acceptInquiryTool,
-  startDesignTool,
-  scheduleJobTool,
-  unscheduleJobTool,
-  viewWorkshopTool,
-  viewScheduleTool,
-  viewInventoryTool,
-  purchaseMaterialTool,
-  runTrialTool,
-  deliverOrderTool,
-  advanceShiftTool,
-  advanceShiftsTool,
-  runPipelineTool,
-  listEventsTool,
-  handleEventTool,
-  listTechTool,
-  researchTool,
-  resetGameTool,
-  // 中台通用工具（observe_state 需 resolveContext 的 getState/formatTime，已注入；其余零接线）
+  factoryTool, // dashboard/shift/advance/events/tech/pipeline/reset (10 modes)
+  orderTool, // list/detail/accept/deliver (4 modes)
+  productionTool, // design/schedule/unschedule/trial (4 modes)
+  workshopTool, // view_machines/view_schedule/view_inventory/purchase (4 modes)
+  // coreTools (observe_state needs getState/formatTime from agent-config; show_ui needs domMap)
+  coreTools.showUi,
   coreTools.observeState,
   coreTools.now,
   coreTools.recall,
