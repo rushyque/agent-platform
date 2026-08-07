@@ -137,12 +137,66 @@
   .spark { width: 90px; height: 22px; display: inline-block; vertical-align: middle; }
   .hit-cell { color: var(--red); font-weight: 600; }
   .hit-cell.none { color: var(--muted); font-weight: 400; }
+
+  /* ===== 评测类型分页 ===== */
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabs button {
+    background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    padding: 7px 14px; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 600;
+  }
+  .tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* ===== 跟随测试 ===== */
+  .follow-score { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .fscore {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; min-width: 132px;
+  }
+  .fscore .h { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .fscore .big { font-size: 18px; font-weight: 600; font-family: var(--mono); }
+  .fscore .ok { color: var(--green); }
+  .fscore .bad { color: var(--red); }
+  .fcases { display: flex; flex-direction: column; gap: 8px; }
+  .fcase {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden;
+  }
+  .fcase-head {
+    display: grid; grid-template-columns: 70px 44px 1fr 96px 96px 52px; gap: 8px;
+    align-items: center; padding: 8px 10px; cursor: pointer; font-size: 12px;
+  }
+  .fcase-head:hover { background: rgba(79,140,255,0.06); }
+  .fcase-head .id { font-family: var(--mono); color: var(--muted); }
+  .fcase-head .lang { font-family: var(--mono); color: var(--blue); }
+  .fcase-head .note { color: var(--text); }
+  .fcase-head .sc { text-align: right; font-family: var(--mono); }
+  .fcase-head .pass .ok { color: var(--green); font-weight: 600; }
+  .fcase-head .pass .bad { color: var(--red); font-weight: 600; }
+  .fchip { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+  .fchip.ok { background: rgba(63,185,80,0.14); color: var(--green); }
+  .fchip.bad { background: rgba(248,81,73,0.15); color: var(--red); }
+  .fcase-body { display: none; border-top: 1px solid var(--border); padding: 10px; }
+  .fcase.open .fcase-body { display: block; }
+  .fturn { margin: 8px 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+  .fturn-head { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--muted); margin-bottom: 6px; flex-wrap: wrap; }
+  .fturn-head .tno { font-family: var(--mono); color: var(--blue); }
+  .fturn-head .tp { flex: 1; color: var(--text); }
+  .fturn-head .fchip { flex: 0 0 auto; }
+  .fsec { margin-bottom: 10px; }
+  .fsec h4 { margin: 0 0 4px; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  .ftext { font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow: auto; }
+  .fchecks { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+  .fcheck { display: flex; gap: 8px; font-size: 11px; }
+  .fcheck .mk { width: 16px; color: var(--green); font-weight: 700; }
+  .fcheck .mk.bad { color: var(--red); }
+  .fcheck .detail { color: var(--muted); }
+  .follow-note { color: var(--muted); font-size: 11px; margin-top: 8px; line-height: 1.6; }
 </style>
 </head>
 <body>
 <header>
   <span class="dot" id="led"></span>
-  <h1>本地模型并发性能压测</h1>
+  <h1>本地模型评测台</h1>
   <span class="sub" id="status">就绪</span>
   <span class="spacer"></span>
   <button id="btn-json" disabled>导出 JSON</button>
@@ -152,6 +206,13 @@
 </header>
 
 <div class="wrap">
+  <div class="tabs">
+    <button data-tab="bench" class="active">并发压测</button>
+    <button data-tab="follow">跟随测试</button>
+  </div>
+
+  <!-- ============ 并发压测 ============ -->
+  <section id="panel-bench">
   <!-- 配置 -->
   <div class="card">
     <h2>测试配置</h2>
@@ -232,6 +293,61 @@
     </table>
     <div class="note">点任意行查看该请求的"吐字速率 vs 时间"曲线（红色段=低于中位速率 30% 的卡顿带）。</div>
   </div>
+  </section>
+
+  <!-- ============ 跟随测试 ============ -->
+  <section id="panel-follow" class="hidden">
+  <div class="card">
+    <h2>跟随测试配置</h2>
+    <div class="grid-config">
+      <div class="field" style="grid-column: 1 / -1;">
+        <label>测试链路</label>
+        <div class="seg" id="follow-mode-seg">
+          <button data-mode="raw" class="active">纯模型直连（推荐，看模型本身）</button>
+          <button data-mode="e2e">端到端经中台（/agent/run）</button>
+        </div>
+        <div class="note">多段自然对话、尽量用复杂问题、无指令注入；逐轮分别判定「思考体」与「最终回复」的语言覆盖是否持续稳定（zh/en/fr/fa/de）。</div>
+      </div>
+      <div class="field follow-raw">
+        <label>模型 override（可选，默认服务端 DEEPSEEK_MODEL）</label>
+        <input id="follow-model" placeholder="deepseek-v4-flash" />
+      </div>
+      <div class="field follow-raw">
+        <label>reasoning_effort（deepseek-v4-flash 默认不出思考体，建议 medium）</label>
+        <select id="follow-effort">
+          <option value="">默认（不传）</option>
+          <option value="none">none</option>
+          <option value="low">low</option>
+          <option value="medium" selected>medium</option>
+          <option value="high">high</option>
+          <option value="xhigh">xhigh</option>
+        </select>
+      </div>
+      <div class="field follow-e2e hidden">
+        <label>agentId（如 starlink-factory）</label>
+        <input id="follow-agentId" placeholder="starlink-factory" />
+      </div>
+      <div class="field follow-e2e hidden">
+        <label>JWT（可留空）</label>
+        <input id="follow-jwt" placeholder="仅填 token" />
+      </div>
+    </div>
+    <div class="quickrow" style="margin-top:10px;">
+      <button id="btn-follow-run" class="primary" style="background:var(--accent);border:none;color:#fff;padding:6px 14px;">运行跟随测试</button>
+      <button id="btn-follow-json" disabled>导出结果 JSON</button>
+    </div>
+    <div class="follow-note">
+      每段对话均保留完整上下文继续追问，语言覆盖率 = 各轮思考体/回复在对应脚本上通过的占比。
+      raw=直接打 endpoints，测模型本身；e2e=经中台。reasoning_effort 仅 deepseek 系网关需要。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>跟随结果汇总</h2>
+    <div class="follow-score" id="follow-score"><div class="empty">点击「运行跟随测试」开始。</div></div>
+    <div class="fcases" id="follow-cases"><div class="empty">暂无数据。</div></div>
+  </div>
+  </section>
 </div>
 
 <script>
@@ -252,6 +368,13 @@ let allReports = [];                 // 历史所有 report（导出用）
 const completedSlots = [];           // 每次 start 内累计的 slot-done（含 timeline），明细/甘特/速率图唯一数据源
 let selectedReqId = null;            // 当前展开速率图的请求
 const hitBadge = $("#hit-badge"), rateChartEl = $("#rate-chart");
+
+// ===== 跟随测试状态 =====
+let followMode = "raw";
+let followRunning = false;
+let followAbort = null;
+const followThreads = new Map();     // threadId -> ThreadResult（thread-done / report 汇总）
+let followReport = null;             // 汇总 + 导出
 
 const PRESETS = {
   long: { text: "请写一篇题为《故乡的河》的中文散文，不少于 5000 字。要求：从童年记忆、河流的地理变迁、两岸人事更迭、对故乡的情感寄托四个方面依次展开，每个方面都要详尽细腻、细节丰富、语言优美。必须写满 5000 字以上，不得提前收尾或敷衍。", target: 5000 },
@@ -277,6 +400,19 @@ $("#conc").addEventListener("input", () => {
   document.querySelectorAll(".quickrow button[data-c]").forEach(x =>
     x.classList.toggle("active", Number(x.dataset.c) === concurrency));
 });
+
+// ===== 评测类型分页 + 跟随测试交互 =====
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+$("#follow-mode-seg").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-mode]"); if (!b) return;
+  followMode = b.dataset.mode;
+  $("#follow-mode-seg").querySelectorAll("button").forEach(x => x.classList.toggle("active", x === b));
+  document.querySelectorAll(".follow-raw").forEach(el => el.classList.toggle("hidden", followMode !== "raw"));
+  document.querySelectorAll(".follow-e2e").forEach(el => el.classList.toggle("hidden", followMode !== "e2e"));
+});
+$("#btn-follow-run").addEventListener("click", runFollow);
+$("#btn-follow-json").addEventListener("click", () =>
+  download("follow-report.json", JSON.stringify(followReport || { empty: true }, null, 2), "application/json"));
 
 // ===== 运行 =====
 btnRun.addEventListener("click", start);
@@ -332,7 +468,7 @@ async function start() {
   }
 }
 
-async function pumpSSE(body) {
+async function pumpSSE(body, dispatch = handle) {
   const reader = body.getReader();
   const dec = new TextDecoder();
   let buf = "";
@@ -345,7 +481,7 @@ async function pumpSSE(body) {
       const raw = buf.slice(0, sep); buf = buf.slice(sep + 2);
       const lines = raw.split("\n").filter(l => l.startsWith("data:")).map(l => l.slice(5).replace(/^ /, ""));
       const data = lines.join("\n").trim();
-      if (data) { try { handle(JSON.parse(data)); } catch {} }
+      if (data) { try { dispatch(JSON.parse(data)); } catch {} }
     }
   }
 }
@@ -702,6 +838,167 @@ function toMarkdown() {
     });
   }
   return lines.join("\n");
+}
+
+// ===== 跟随测试：逻辑 + 渲染 =====
+function switchTab(name) {
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  $("#panel-bench").classList.toggle("hidden", name !== "bench");
+  $("#panel-follow").classList.toggle("hidden", name !== "follow");
+  // 顶部「开始/停止」只作用于并发压测
+  btnRun.classList.toggle("hidden", name !== "bench");
+  btnStop.classList.add("hidden");
+  statusEl.textContent = name === "bench" ? "就绪" : "跟随测试 · 就绪";
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+async function runFollow() {
+  if (followRunning) return;
+  const body = { mode: followMode };
+  if (followMode === "raw") {
+    const m = $("#follow-model").value.trim(); if (m) body.model = m;
+    const ef = $("#follow-effort").value; if (ef) body.reasoningEffort = ef;
+  } else {
+    const a = $("#follow-agentId").value.trim(); if (!a) { alert("e2e 模式需要 agentId"); return; }
+    body.agentId = a;
+    const j = $("#follow-jwt").value.trim(); if (j) body.jwt = j;
+  }
+
+  followRunning = true;
+  $("#btn-follow-run").disabled = true;
+  $("#btn-follow-json").disabled = true;
+  followThreads.clear(); followReport = null;
+  $("#follow-score").innerHTML = '<div class="empty">运行中…（多段对话逐轮调用，较慢）</div>';
+  $("#follow-cases").innerHTML = '<div class="empty">运行中…</div>';
+  led.className = "dot busy";
+  statusEl.textContent = "跟随测试 · 运行中";
+
+  followAbort = new AbortController();
+  try {
+    const resp = await fetch("/bench/api/follow", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body), signal: followAbort.signal,
+    });
+    if (!resp.ok || !resp.body) {
+      const t = await resp.text().catch(() => "");
+      statusEl.textContent = "请求失败: " + t.slice(0, 200);
+      return;
+    }
+    await pumpSSE(resp.body, followHandle);
+  } catch (err) {
+    if (err.name !== "AbortError") statusEl.textContent = "出错: " + err.message;
+  } finally {
+    followRunning = false;
+    $("#btn-follow-run").disabled = false;
+    led.className = followAbort.signal.aborted ? "dot" : "dot ok";
+    followAbort = null;
+  }
+}
+
+function followHandle(ev) {
+  switch (ev.type) {
+    case "follow-start":
+      statusEl.textContent = `跟随测试 · ${ev.threads || ""} 段对话 · ${ev.reasoningEffort ? ("effort=" + ev.reasoningEffort) : "默认"} · ${ev.mode === "e2e" ? "经中台" : "直连"}`;
+      break;
+    case "thread-done":
+      followThreads.set(ev.thread.id, ev.thread);
+      renderFollowScore();
+      renderFollowCases();
+      break;
+    case "follow-report":
+      followReport = ev.report;
+      for (const th of ev.report.threads) followThreads.set(th.id, th);
+      renderFollowScore();
+      renderFollowCases();
+      $("#btn-follow-json").disabled = false;
+      statusEl.textContent = "跟随测试 · 完成";
+      break;
+    case "fatal":
+      statusEl.textContent = "后端错误: " + ev.message;
+      break;
+  }
+}
+
+function threadList() { return [...followThreads.values()]; }
+
+function aggFromThreads() {
+  const list = threadList();
+  const ok = list.filter(t => t.ok);
+  return {
+    total: list.length, ok: ok.length,
+    rp: ok.reduce((a, t) => a + t.reasoningPassed, 0),
+    rt: ok.reduce((a, t) => a + t.reasoningTotal, 0),
+    ap: ok.reduce((a, t) => a + t.answerPassed, 0),
+    at: ok.reduce((a, t) => a + t.answerTotal, 0),
+    full: list.filter(t => t.pass).length,
+  };
+}
+
+function renderFollowScore() {
+  const a = aggFromThreads();
+  const el = $("#follow-score");
+  if (a.total === 0) { el.innerHTML = '<div class="empty">点击「运行跟随测试」开始。</div>'; return; }
+  const pct = (x, y) => y ? ((x / y) * 100).toFixed(0) + "%" : "—";
+  const cls = (x, y) => x === y && y > 0 ? "ok" : "bad";
+  el.innerHTML =
+    `<div class="fscore"><div class="h">对话完成 / 成功</div><div class="big">${a.ok}<span style="font-size:11px;color:var(--muted)">/${a.total}</span></div></div>` +
+    `<div class="fscore"><div class="h">思考语言覆盖</div><div class="big ${cls(a.rp, a.rt)}">${a.rp}/${a.rt} · ${pct(a.rp, a.rt)}</div></div>` +
+    `<div class="fscore"><div class="h">回复语言覆盖</div><div class="big ${cls(a.ap, a.at)}">${a.ap}/${a.at} · ${pct(a.ap, a.at)}</div></div>` +
+    `<div class="fscore"><div class="h">整段语言全过</div><div class="big ${a.full === a.ok ? "ok" : "bad"}">${a.full}/${a.ok}</div></div>`;
+}
+
+function checksHtml(results) {
+  return results.map(r =>
+    `<div class="fcheck"><span class="mk ${r.pass ? "" : "bad"}">${r.pass ? "✓" : "✗"}</span>` +
+    `<span>${esc(r.label)}</span><span class="detail">${esc(r.detail)}</span></div>`).join("");
+}
+
+function renderFollowCases() {
+  const el = $("#follow-cases");
+  const list = threadList();
+  if (list.length === 0) { el.innerHTML = '<div class="empty">暂无数据。</div>'; return; }
+  el.innerHTML = list.map(t => {
+    const sc = t.pass;
+    return `
+      <div class="fcase" data-fid="${esc(t.id)}">
+        <div class="fcase-head">
+          <span class="id">${esc(t.id)}</span>
+          <span class="lang">${esc(t.lang)}</span>
+          <span class="note">${esc(t.note)} · ${t.turns.length} 轮</span>
+          <span class="sc">思考 <b>${t.reasoningPassed}/${t.reasoningTotal}</b></span>
+          <span class="sc">回复 <b>${t.answerPassed}/${t.answerTotal}</b></span>
+          <span class="pass">${t.ok
+            ? `<span class="fchip ${sc ? "ok" : "bad"}">${sc ? "通过" : "未过"}</span>`
+            : `<span class="fchip bad">失败</span>`}</span>
+        </div>
+        <div class="fcase-body">
+          ${t.turns.map(tn => {
+            const tsc = tn.pass;
+            return `
+            <div class="fturn">
+              <div class="fturn-head">
+                <span class="tno">#${tn.index}</span>
+                <span class="tp">${esc(tn.prompt)}</span>
+                ${tn.ok
+                  ? `<span class="fchip ${tsc ? "ok" : "bad"}">${tsc ? "语言覆盖" : "未覆盖"}</span>`
+                  : `<span class="fchip bad">失败</span>`}
+              </div>
+              ${tn.ok ? `
+              <div class="fsec"><h4>思考体</h4><div class="ftext">${esc(tn.reasoningText) || "（无）"}</div>
+                <div class="fchecks">${checksHtml(tn.reasoning.results)}</div></div>
+              <div class="fsec"><h4>最终回复</h4><div class="ftext">${esc(tn.answerText) || "（无）"}</div>
+                <div class="fchecks">${checksHtml(tn.answer.results)}</div></div>
+              ` : `<div class="fsec"><h4>本轮请求失败</h4><div class="ftext">${esc(tn.error || "未知错误")}</div></div>`}
+            </div>`;
+          }).join("")}
+        </div>
+      </div>`;
+  }).join("");
+  el.querySelectorAll(".fcase-head").forEach(h =>
+    h.addEventListener("click", () => h.parentElement.classList.toggle("open")));
 }
 </script>
 </body>

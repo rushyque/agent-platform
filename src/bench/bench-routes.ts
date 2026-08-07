@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { probeRaw, probeE2E, type ProbeResult, type ProbeEvent } from "./probes.js";
+import { runFollowThreads, FOLLOW_THREADS, type ThreadResult, type FollowReport } from "./follow.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "../../public");
@@ -29,6 +30,14 @@ export interface BenchRequest {
   agentId?: string;
   jwt?: string;
   model?: string;
+}
+
+export interface FollowRequest {
+  mode: "raw" | "e2e";
+  model?: string;
+  reasoningEffort?: string;
+  agentId?: string;
+  jwt?: string;
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
@@ -272,6 +281,91 @@ async function handleRun(req: http.IncomingMessage, res: http.ServerResponse): P
   }
 }
 
+// ===== 跟随测试（follow suite）=====
+async function handleFollow(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  let payload: FollowRequest;
+  try {
+    const chunks: Buffer[] = [];
+    for await (const c of req) chunks.push(c as Buffer);
+    payload = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
+  } catch {
+    sendJson(res, 400, { error: "无效 JSON body" });
+    return;
+  }
+  const mode = payload.mode === "e2e" ? "e2e" : "raw";
+  if (mode === "e2e" && !payload.agentId) {
+    sendJson(res, 400, { error: "e2e 模式需要 agentId" });
+    return;
+  }
+
+  const host = req.headers.host || "127.0.0.1:9876";
+  const baseOrigin = `http://${host}`;
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  const emit = (obj: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  };
+
+  const ac = new AbortController();
+  const onClose = () => ac.abort();
+  req.on("close", onClose);
+  emit({
+    type: "follow-start",
+    mode,
+    model: payload.model || "",
+    reasoningEffort: payload.reasoningEffort || "",
+    threads: FOLLOW_THREADS.length,
+  });
+  const trunc = (s: string) => s.slice(0, 400);
+
+  try {
+    const report = await runFollowThreads({
+      mode,
+      model: payload.model,
+      reasoningEffort: payload.reasoningEffort,
+      baseOrigin,
+      agentId: payload.agentId,
+      jwt: payload.jwt,
+      signal: ac.signal,
+      onTurn: (threadId, index, turn) => {
+        emit({
+          type: "turn-done",
+          threadId,
+          index,
+          turn: { ...turn, reasoningText: trunc(turn.reasoningText), answerText: trunc(turn.answerText) },
+        });
+      },
+      onThread: (thread: ThreadResult) => {
+        emit({
+          type: "thread-done",
+          thread: {
+            ...thread,
+            turns: thread.turns.map((t) => ({ ...t, reasoningText: trunc(t.reasoningText), answerText: trunc(t.answerText) })),
+          },
+        });
+      },
+    });
+    const slim: FollowReport = {
+      ...report,
+      threads: report.threads.map((th) => ({
+        ...th,
+        turns: th.turns.map((t) => ({ ...t, reasoningText: trunc(t.reasoningText), answerText: trunc(t.answerText) })),
+      })),
+    };
+    emit({ type: "follow-report", report: slim });
+  } catch (err) {
+    emit({ type: "fatal", message: (err as Error).message });
+  } finally {
+    req.off("close", onClose);
+    res.end();
+  }
+}
+
 export async function handleBenchRoutes(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -280,6 +374,10 @@ export async function handleBenchRoutes(
 ): Promise<boolean> {
   if (pathname === "/bench/api/run" && req.method === "POST") {
     await handleRun(req, res);
+    return true;
+  }
+  if (pathname === "/bench/api/follow" && req.method === "POST") {
+    await handleFollow(req, res);
     return true;
   }
 

@@ -31,6 +31,7 @@ export interface ProbeResult {
   stalls: number; // 间隔 > 500ms 的次数
   samples: { t: number; c: number }[]; // 每个 content chunk 的 {相对 t0 的 ms, 本次字符数}，用于吐字速率时间轴
   text: string; // 累计可见文本
+  reasoning: string; // 累计思考体（reasoning_content / reasoning / AG-UI REASONING_*）
   tokenCount: number | null; // raw 优先取 usage.completion_tokens；e2e/缺失则按 chunk 段数估
   charCount: number;
   error?: string;
@@ -39,7 +40,7 @@ export interface ProbeResult {
 const STALL_MS = 500;
 
 function newResult(mode: "raw" | "e2e"): ProbeResult {
-  return { ok: false, mode, t0: 0, ttft: null, tEnd: null, chunks: [], stalls: 0, samples: [], text: "", tokenCount: null, charCount: 0 };
+  return { ok: false, mode, t0: 0, ttft: null, tEnd: null, chunks: [], stalls: 0, samples: [], text: "", reasoning: "", tokenCount: null, charCount: 0 };
 }
 
 // 把 SSE 文本流切成逐条 data JSON 的异步迭代器。
@@ -73,13 +74,23 @@ async function* sseLines(body: ReadableStream<Uint8Array>, signal?: AbortSignal)
 }
 
 // ===== 纯模型直连 =====
-export async function probeRaw(opts: {
-  prompt: string;
+export interface ChatMessage {
+  role: "user" | "assistant" | "tool";
+  content: string;
+  tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+  tool_call_id?: string;
+  name?: string;
+}
+
+// 多轮对话直连：messages 携带完整历史（user/assistant 交替），每次调用返回该轮 reasoning + text。
+export async function probeChat(opts: {
+  messages: ChatMessage[];
   model?: string;
+  reasoningEffort?: string; // deepseek-v4-flash 等需 reasoning_effort 才返回思考体
   signal?: AbortSignal;
   onEvent?: (e: ProbeEvent) => void;
 }): Promise<ProbeResult> {
-  const { prompt, model, signal, onEvent } = opts;
+  const { messages, model, reasoningEffort, signal, onEvent } = opts;
   const result = newResult("raw");
   const t0 = Date.now();
   result.t0 = t0;
@@ -88,8 +99,11 @@ export async function probeRaw(opts: {
   const url = `${settings.DEEPSEEK_BASE_URL.replace(/\/$/, "")}/chat/completions`;
   const body = {
     model: model || settings.DEEPSEEK_MODEL,
-    messages: [{ role: "user", content: prompt }],
+    messages,
     stream: true,
+    ...(reasoningEffort && reasoningEffort !== "none"
+      ? { reasoning_effort: reasoningEffort }
+      : {}),
   };
 
   let resp: Response;
@@ -121,7 +135,13 @@ export async function probeRaw(opts: {
       try { obj = JSON.parse(data); } catch { continue; }
       const delta = obj?.choices?.[0]?.delta;
       const content: string | undefined = delta?.content;
+      // 思考体：DeepSeek 官方/GLM 走 reasoning_content，本地 vLLM 网关(deepseekv4flash)走 reasoning
+      const reasoningPiece: string | undefined = delta?.reasoning_content ?? delta?.reasoning;
       const now = Date.now();
+
+      if (typeof reasoningPiece === "string" && reasoningPiece) {
+        result.reasoning += reasoningPiece;
+      }
 
       // TTFT：首个非空 content
       if (result.ttft === null && content) {
@@ -175,29 +195,48 @@ export async function probeRaw(opts: {
   }
 }
 
+// 单轮直连（旧并发压测用）：等价 probeChat 的单条 user 消息。
+export async function probeRaw(opts: {
+  prompt: string;
+  model?: string;
+  reasoningEffort?: string;
+  signal?: AbortSignal;
+  onEvent?: (e: ProbeEvent) => void;
+}): Promise<ProbeResult> {
+  return probeChat({
+    messages: [{ role: "user", content: opts.prompt }],
+    model: opts.model,
+    reasoningEffort: opts.reasoningEffort,
+    signal: opts.signal,
+    onEvent: opts.onEvent,
+  });
+}
+
 // ===== 经中台端到端（AG-UI）=====
 export async function probeE2E(opts: {
   baseOrigin: string; // 如 http://127.0.0.1:9876
   agentId: string;
   prompt: string;
+  threadId?: string; // 多轮时复用同一 threadId 保持会话
+  messages?: Array<{ id: string; role: "user" | "assistant"; content: string }>; // 多轮完整历史（含本条 user）
   jwt?: string;
   signal?: AbortSignal;
   onEvent?: (e: ProbeEvent) => void;
 }): Promise<ProbeResult> {
-  const { baseOrigin, agentId, prompt, jwt, signal, onEvent } = opts;
+  const { baseOrigin, agentId, prompt, threadId, messages, jwt, signal, onEvent } = opts;
   const result = newResult("e2e");
   const t0 = Date.now();
   result.t0 = t0;
   let lastChunkTs = 0;
 
   const url = `${baseOrigin.replace(/\/$/, "")}/agent/${encodeURIComponent(agentId)}/run`;
-  const id = randomUUID();
+  const id = threadId || randomUUID();
   // RunAgentInputSchema（@ag-ui/client）要求 tools/context 为数组；threadId/runId 必填。
   const body = {
-    threadId: `bench-${id}`,
-    runId: `bench-${id}`,
-    messageId: `bench-msg-${id}`,
-    messages: [{ id: `bench-msg-${id}`, role: "user", content: prompt }],
+    threadId: id,
+    runId: `run-${id}`,
+    messageId: `msg-${id}`,
+    messages: messages ?? [{ id: `msg-${id}`, role: "user", content: prompt }],
     state: {},
     tools: [],
     context: [],
@@ -227,6 +266,15 @@ export async function probeE2E(opts: {
       try { obj = JSON.parse(data); } catch { continue; }
       const type: string = obj?.type ?? obj?.event ?? "";
       const now = Date.now();
+
+      // 思考体：AG-UI 用 REASONING_MESSAGE_CONTENT；低层 AI SDK 推理事件是 reasoning-delta。都不算 TTFT。
+      const isReasoningEvent =
+        type === "REASONING_MESSAGE_CONTENT" ||
+        type === "reasoning-delta";
+      const reasoningPiece: string | undefined = obj?.delta ?? obj?.content ?? obj?.text;
+      if (isReasoningEvent && typeof reasoningPiece === "string") {
+        result.reasoning += reasoningPiece;
+      }
 
       // 用户可见首字：TEXT_MESSAGE_CONTENT（推理 REASONING_* 不算）
       const isTextContent =
