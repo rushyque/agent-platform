@@ -19,18 +19,16 @@ export const listOrdersTool: ToolDefinition = {
       .enum(["已完成", "未收款", "进行中", "已取消", "待收款"])
       .optional()
       .describe("订单状态过滤"),
-    limit: z.number().optional().describe("最多返回条数，默认 20，最大 50"),
   }),
   readonly: true,
   execute: async (args, context) => {
     const ctx = context as SalesContext;
     const filters: Record<string, string | number> = {};
     if (args.orderNo) filters.orderNo = String(args.orderNo);
-    if (args.customer) filters.customer = String(args.customer);
+    if (args.customer) filters.customerName = String(args.customer);
     if (args.status) filters.status = String(args.status);
     if (args.startDate) filters.startDate = String(args.startDate);
     if (args.endDate) filters.endDate = String(args.endDate);
-    filters.limit = args.limit ?? 20;
     const orders = await hubFetch(ctx, "/api/orders/filter", {
       method: "POST",
       body: JSON.stringify(filters),

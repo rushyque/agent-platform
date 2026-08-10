@@ -11,7 +11,6 @@ export const listCustomersTool: ToolDefinition = {
   parameters: z.object({
     name: z.string().optional().describe("客户名，模糊匹配"),
     salesPerson: z.string().optional().describe("业务员/销售员，精确匹配"),
-    limit: z.number().optional().describe("最多返回条数，默认 20，最大 50"),
   }),
   readonly: true,
   execute: async (args, context) => {
@@ -19,7 +18,6 @@ export const listCustomersTool: ToolDefinition = {
     const filters: Record<string, string | number> = {};
     if (args.name) filters.name = String(args.name);
     if (args.salesPerson) filters.salesPerson = String(args.salesPerson);
-    filters.limit = args.limit ?? 20;
     const customers = await hubFetch(ctx, "/api/customers/filter", {
       method: "POST",
       body: JSON.stringify(filters),
@@ -56,7 +54,7 @@ export const customerDetailTool: ToolDefinition = {
     if (!id && args.name) {
       const customers = await hubFetch<any[]>(ctx, "/api/customers/filter", {
         method: "POST",
-        body: JSON.stringify({ name: String(args.name), limit: 5 }),
+        body: JSON.stringify({ name: String(args.name) }),
       });
       if (!Array.isArray(customers) || customers.length === 0) {
         return { ok: false, message: `未找到客户 ${args.name}` };
