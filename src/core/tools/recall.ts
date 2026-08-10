@@ -11,7 +11,7 @@ export const recallTool: ToolDefinition = {
   description:
     "回看本线程近期调用过的工具结果摘要。需要回忆「之前查到什么」但不想重查时用。" +
     "返回 toolName / ref / summary / seq。需要某条结果完整数据时，用返回的 ref 调 getArtifact 取回。" +
-    "（不要用它替代 query_database 去查新数据——它只回看历史结果。）" +
+    "（不要用它替代 run_sql / list_tables / describe_table 去查新数据——它只回看历史结果。）" +
     "since:this_run=仅本次 run;last_step=最近一次;thread(默认)=本线程全部。",
   parameters: z.object({
     toolName: z

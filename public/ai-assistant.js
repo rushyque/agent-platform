@@ -71,10 +71,143 @@ function performOpenLink(url,mode){
   return true;
 }
 
+// ===== 通用渲染块（render）=====
+// render 契约：{ ui: { type: "render", blocks: [...] } }，每个 block 按 kind 渲染。
+// 这里做最小可用的自包含渲染器（样式仅为演示，真实前端自由决定）。
+function escAttr(s){return String(s==null?"":s).replace(/[&<>"\']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+
+function renderCardBlock(b){
+  var html='<div class="ai-blk ai-blk-cards">';
+  if(b.title)html+='<div class="ai-blk-title">'+esc(b.title)+'</div>';
+  html+='<div class="ai-cards-row">';
+  (b.cards||[]).forEach(function(c){
+    var tone=c.tone||"default";
+    html+='<div class="ai-card ai-card-'+tone+'"><div class="ai-card-title">'+esc(c.title)+'</div><div class="ai-card-value">'+esc(c.value)+'</div>';
+    if(c.subtitle)html+='<div class="ai-card-sub">'+esc(c.subtitle)+'</div>';
+    html+='</div>';
+  });
+  html+='</div></div>';
+  return html;
+}
+
+function renderTableBlock(b){
+  var html='<div class="ai-blk ai-blk-table">';
+  if(b.title)html+='<div class="ai-blk-title">'+esc(b.title)+'</div>';
+  html+='<table class="ai-table"><thead><tr>';
+  (b.columns||[]).forEach(function(col){html+='<th'+(col.width?' style="width:'+escAttr(col.width)+'"':'')+'>'+esc(col.label)+'</th>'});
+  html+='</tr></thead><tbody>';
+  (b.rows||[]).forEach(function(row){
+    html+='<tr>';b.columns.forEach(function(col){html+='<td>'+esc(row[col.key])+'</td>'});html+='</tr>';
+  });
+  html+='</tbody></table></div>';
+  return html;
+}
+
+function renderChartBlock(b){
+  var html='<div class="ai-blk ai-blk-chart">';
+  if(b.title)html+='<div class="ai-blk-title">'+esc(b.title)+'</div>';
+  // 简单横向条状图（演示用，真实前端可换成 ECharts/Chart.js）
+  var max=1;
+  b.series.forEach(function(s){s.data.forEach(function(v){if(v>max)max=v})});
+  html+='<div class="ai-chart">';
+  var cats=b.xAxis&&b.xAxis.length?b.xAxis:(b.series[0]?b.series[0].data.map(function(_,i){return i+1}):[]);
+  b.series.forEach(function(s,si){
+    cats.forEach(function(cat,i){
+      var v=s.data[i]!=null?s.data[i]:0, pct=Math.round(v/max*100);
+      html+='<div class="ai-chart-row"><span class="ai-chart-cat">'+esc(cat)+'</span><span class="ai-chart-bar" style="width:'+pct+'%"></span><span class="ai-chart-val">'+s.name+':'+esc(v)+'</span></div>';
+    });
+  });
+  html+='</div></div>';
+  return html;
+}
+
+function renderMermaidBlock(b){
+  return '<div class="ai-blk ai-blk-mermaid"><div class="ai-blk-title">'+(b.title?esc(b.title):"Mermaid")+
+    '</div><pre class="ai-mermaid-code">'+esc(b.code)+'</pre><div style="color:var(--ai-dim);font-size:10px">（前端按契约接入真实 mermaid 渲染）</div></div>';
+}
+
+function renderDocumentBlock(b){
+  var html='<div class="ai-blk ai-blk-doc">';
+  if(b.title)html+='<div class="ai-blk-title">'+esc(b.title)+'</div>';
+  (b.sections||[]).forEach(function(sec){
+    if(sec.heading)html+='<div class="ai-doc-head">'+esc(sec.heading)+'</div>';
+    (sec.paragraphs||[]).forEach(function(p){html+='<p>'+esc(p)+'</p>'});
+    if(sec.bullets&&sec.bullets.length){html+='<ul>';sec.bullets.forEach(function(it){html+='<li>'+esc(it)+'</li>'});html+='</ul>'}
+  });
+  return html+'</div>';
+}
+
+function renderMarkdownBlock(b){return '<div class="ai-blk ai-blk-md">'+md(b.markdown)+'</div>'}
+
+function renderChoicesBlock(b){
+  var html='<div class="ai-blk ai-blk-choices">';
+  if(b.prompt)html+='<div class="ai-choice-prompt">'+esc(b.prompt)+'</div>';
+  html+='<div class="ai-choices">';
+  (b.choices||[]).forEach(function(ch){
+    var v=escAttr(ch.value||ch.label||"");
+    html+='<button class="ai-choice-btn '+(ch.style||"default")+'" data-ai-choice="'+v+'">'+esc(ch.label)+'</button>';
+  });
+  html+='</div></div>';
+  return html;
+}
+
+function performRenderBlocks(blocks){
+  var html="";
+  (blocks||[]).forEach(function(b){
+    if(!b||!b.kind)return;
+    if(b.kind==="cards")html+=renderCardBlock(b);
+    else if(b.kind==="table")html+=renderTableBlock(b);
+    else if(b.kind==="chart")html+=renderChartBlock(b);
+    else if(b.kind==="mermaid")html+=renderMermaidBlock(b);
+    else if(b.kind==="document")html+=renderDocumentBlock(b);
+    else if(b.kind==="markdown")html+=renderMarkdownBlock(b);
+    else if(b.kind==="notify")performNotify(b.message,b.level);
+    else if(b.kind==="choices")html+=renderChoicesBlock(b);
+    else if(b.kind==="link")performOpenLink(b.url,b.mode);
+  });
+  return html;
+}
+
+// 内联渲染块解析（Goal 1：render 是第一等结构化输出，模型在文本里 <render>{json}</render> 声明）。
+// 与中台 parseRenderBlocks 同语义；这里做浏览器端最小实现。
+function parseInlineRenderBlocks(text){
+  if(!text)return[];
+  var out=[],re=/<render>([\s\S]*?)<\/render>/gi,m;
+  while((m=re.exec(text))!==null){
+    var t=m[1].trim();
+    try{
+      var parsed=JSON.parse(t);
+      if(!Array.isArray(parsed)){
+        if(Array.isArray(parsed.blocks))parsed=parsed.blocks;
+        else if(Array.isArray(parsed.ui&&parsed.ui.blocks))parsed=parsed.ui.blocks;
+      }
+      var arr=Array.isArray(parsed)?parsed:[parsed];
+      arr.forEach(function(b){if(b&&b.kind)out.push(b)});
+    }catch(e){}
+  }
+  return out;
+}
+
+// 把内联渲染块追加到助手气泡末尾（文本仍照常显示，块在其后渲染）。
+function renderInlineBlocksInto(text,bubbleEl){
+  if(!bubbleEl)return;
+  var blocks=parseInlineRenderBlocks(text);
+  if(!blocks.length)return;
+  var wrap=document.createElement("div");
+  wrap.className="ai-render-inline";
+  wrap.innerHTML=performRenderBlocks(blocks);
+  bubbleEl.appendChild(wrap);
+  scrollBody();
+}
+
 // 统一 UI 分发：解析工具结果，按 ui.type 执行
 function dispatchUI(parsed){
   if(!parsed||!parsed.ui)return null;
   var ui=parsed.ui,type=ui.type;
+  if(type==="render"){
+    var html=performRenderBlocks(ui.blocks);
+    return{html:html,label:"render "+((ui.blocks||[]).length)+" blocks"};
+  }
   if(type==="guide"){
     var ok=performGuide(ui.target);
     return{label:ui.target,ok:ok};
@@ -212,7 +345,29 @@ css.textContent=
 ".ai-choice-btn.danger{border-color:rgba(255,107,123,.4);color:var(--ai-red)}"+
 ".ai-choice-btn:disabled{opacity:.4;cursor:default}"+
 ".ai-choice-prompt{font-size:12px;color:var(--ai-dim);margin-bottom:4px}"+
-".ai-tool.ui-choices{border-left-color:var(--ai-violet)}";
+".ai-tool.ui-choices{border-left-color:var(--ai-violet)}"+
+".ai-tool.ui-render{border-left-color:var(--ai-cyan)}"+
+".ai-render{margin-top:6px}"+
+".ai-blk{margin:8px 0}"+
+".ai-blk-title{font-size:12px;font-weight:700;color:var(--ai-cyan);margin-bottom:4px}"+
+".ai-cards-row{display:flex;flex-wrap:wrap;gap:8px}"+
+".ai-card{flex:1 1 120px;min-width:110px;background:var(--ai-bg2);border:1px solid var(--ai-border2);border-radius:10px;padding:10px 12px}"+
+".ai-card-title{font-size:11px;color:var(--ai-dim)}"+
+".ai-card-value{font-size:18px;font-weight:800;color:var(--ai-txt);margin:2px 0}"+
+".ai-card-sub{font-size:10px;color:var(--ai-dim)}"+
+".ai-card-positive .ai-card-value{color:var(--ai-green)}.ai-card-warning .ai-card-value{color:var(--ai-amber)}.ai-card-negative .ai-card-value{color:var(--ai-red)}"+
+".ai-table{border-collapse:collapse;width:100%;font-size:11px}"+
+".ai-table th,.ai-table td{border:1px solid var(--ai-border2);padding:5px 8px;text-align:left;color:var(--ai-txt)}"+
+".ai-table th{background:var(--ai-bg2);color:var(--ai-cyan);font-weight:700}"+
+".ai-chart .ai-chart-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:11px}"+
+".ai-chart-cat{flex:0 0 90px;color:var(--ai-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"+
+".ai-chart-bar{height:10px;background:linear-gradient(90deg,var(--ai-cyan),var(--ai-blue));border-radius:5px}"+
+".ai-chart-val{color:var(--ai-txt)}"+
+".ai-mermaid-code{background:var(--ai-bg2);border:1px solid var(--ai-border2);border-radius:8px;padding:8px 10px;overflow:auto;font:11px/1.5 var(--ai-mono,monospace);color:var(--ai-amber);white-space:pre-wrap}"+
+".ai-doc-head{font-size:12px;font-weight:700;color:var(--ai-txt);margin:6px 0 2px}"+
+".ai-doc p{font-size:11px;line-height:1.5;color:var(--ai-txt);margin:2px 0}"+
+".ai-doc ul{margin:2px 0;padding-left:16px;font-size:11px;color:var(--ai-txt)}"+
+".ai-blk-md{font-size:11px;line-height:1.5}";
 document.head.appendChild(css);
 
 // ===== SVG 图标 =====
@@ -390,19 +545,29 @@ function setBusy(b){
   inputEl.disabled=b;
 }
 
-async function sendMessage(text){
-  text=(text||inputEl.value).trim();
-  if(!text||S.busy)return;
-  if(!S.connected){addSysMsg("中台未连接，无法发送消息。");return}
-  inputEl.value="";
-  // 用户消息显示 + 存储
-  addMsgEl("user",text);
+// 用户选择交接：把 <CHOICE_SELECT .../> 结构标记发给中台（下一轮由服务器归一化为 typed 输入），
+// 用户气泡显示 label 而非原始标记。
+function sendChoice(value,label){
+  if(!value||S.busy)return;
+  var payload='<CHOICE_SELECT value="'+escAttr(String(value))+'"'+(label?' label="'+escAttr(String(label))+'"':'')+' />';
+  return sendMessage(payload,label||value);
+}
+
+async function sendMessage(text,display){
+    text=(text||inputEl.value).trim();
+    if(!text||S.busy)return;
+    if(!S.connected){addSysMsg("中台未连接，无法发送消息。");return}
+    inputEl.value="";
+    // 用户消息显示 + 存储
+    addMsgEl("user",display||text);
   // 构建发给中台的消息列表（首条消息附带游戏状态快照）
   var contextPrefix="";
   var snap=gameSnapshot();
   if(snap)contextPrefix="[当前工厂状态]\n"+snap+"\n\n";
   var msgContent=contextPrefix+text;
-  saveMsg("user",text);
+    // 存储用 text（即实现上的 wrapper/原始内容），保证后续轮次的历史里带类型化交接；
+    // 显示已用 display 覆盖为可读文本。
+    saveMsg("user",text);
   // 构建消息体（发给 AG-UI 的 messages 需要完整历史）
   var agMessages=S.messages.map(function(m){return{id:uuid(),role:m.role,content:m.role==="user"&&m===S.messages[S.messages.length-1]?msgContent:m.content}});
   setBusy(true);
@@ -472,13 +637,25 @@ async function sendMessage(text){
                   var all=cb.querySelectorAll("button");
                   for(var i=0;i<all.length;i++){all[i].disabled=true}
                   b.style.borderColor="var(--ai-green)";b.style.color="var(--ai-green)";
-                  if(S.busy){pendingChoice=ch.value;addSysMsg("AI 回复完成后自动发送你的选择")}
-                  else{sendMessage(ch.value)}
+                  if(S.busy){pendingChoice={value:ch.value,label:ch.label};addSysMsg("AI 回复完成后自动发送你的选择")}
+                  else{sendChoice(ch.value,ch.label)}
                 });
                 cb.appendChild(b);
               });
               s.el.innerHTML='<div class="ai-t-name">'+esc(s.name)+'</div>';
               s.el.appendChild(cp);s.el.appendChild(cb);
+            }else if(uiResult&&uiResult.html){
+              // render 块渲染：把 HTML 塞进工具卡，并给选择按钮挂点击
+              s.el.innerHTML='<div class="ai-t-name">'+esc(s.name)+'</div><div class="ai-t-result ok ai-render"><span style="color:var(--ai-dim);font-size:10px">'+esc(hintTxt)+'</span>'+uiResult.html+'</div>';
+              s.el.querySelectorAll("[data-ai-choice]").forEach(function(btn){
+                var chVal=btn.getAttribute("data-ai-choice");
+                btn.addEventListener("click",function(){
+                  s.el.querySelectorAll("[data-ai-choice]").forEach(function(x){x.disabled=true});
+                  btn.style.borderColor="var(--ai-green)";btn.style.color="var(--ai-green)";
+                  if(S.busy){pendingChoice={value:chVal,label:null};addSysMsg("AI 回复完成后自动发送你的选择")}
+                  else{sendChoice(chVal,null)}
+                });
+              });
             }else{
               s.el.innerHTML='<div class="ai-t-name">'+esc(s.name)+'</div><div class="ai-t-result ok">'+esc(hintTxt)+'</div>';
             }
@@ -497,6 +674,8 @@ async function sendMessage(text){
       }
     });
     if(thinkingEl)thinkingEl.remove();
+    // 内联渲染块：模型在文本里声明的 <render>...</render> 追加渲染到气泡
+    if(aiText)renderInlineBlocksInto(aiText,aiBubble);
     // 保存 AI 回复
     if(aiText){saveMsg("assistant",aiText)}
     else if(stepCount>0){saveMsg("assistant","(已执行 "+stepCount+" 个操作，详见上方工具卡片)")}
@@ -508,7 +687,7 @@ async function sendMessage(text){
  }
   setBusy(false);
   // 自动发送排队的选项点击（用户在 AI 回复过程中点了选项按钮）
-  if(pendingChoice){var pc=pendingChoice;pendingChoice=null;sendMessage(pc)}
+  if(pendingChoice){var pc=pendingChoice;pendingChoice=null;sendChoice(pc.value,pc.label)}
 }
 
 // ===== SSE 流解析（AG-UI 协议）=====

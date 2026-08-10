@@ -6,7 +6,7 @@ import { loadThreadSummariesFromDb } from "../core/context/index.js";
 
 const log = logger.for("DB");
 
-// 业务库连接池（ai_platform_db）—— 仅供 db_demo 的 NL2SQL 等业务数据查询用。
+// 业务库连接池（ai_platform_db）—— 仅供 db_demo 等项目的只读数据查询原语（run_sql 等）用。
 // 中台自有状态库（ai_harness_db）走 Prisma（./prisma.ts），不在此。
 let poolPromise: Promise<IConnectionPool> | null = null;
 

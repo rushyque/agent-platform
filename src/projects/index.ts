@@ -6,6 +6,7 @@ import { registerProjectRoutes } from "../core/http-router.js";
 import { starlinkFactoryAgentConfig } from "./starlink-factory/agent-config.js";
 import { freightInquiryAgentConfig } from "./freight-inquiry/agent-config.js";
 import { dbDemoAgentConfig } from "./db-demo/agent-config.js";
+import { saleshubAgentConfig } from "./saleshub/agent-config.js";
 import { freightInquiryRoutes } from "./freight-inquiry/http.js";
 import { starlinkFactoryRoutes } from "./starlink-factory/http.js";
 
@@ -13,6 +14,7 @@ export function registerAllProjects(): void {
   registerAgent(starlinkFactoryAgentConfig);
   registerAgent(freightInquiryAgentConfig);
   registerAgent(dbDemoAgentConfig);
+  registerAgent(saleshubAgentConfig);
   registerProjectRoutes("/inquiry", freightInquiryRoutes);
   registerProjectRoutes("/game", starlinkFactoryRoutes);
 }

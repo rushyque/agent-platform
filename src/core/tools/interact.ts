@@ -9,6 +9,10 @@ import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
 // (ai-assistant.js dispatchUI) intercepts TOOL_CALL_RESULT, reads parsed.ui.type, and
 // executes the real DOM/page action. The front-end does NOT care about the tool name.
 //
+// 能力边界：show_ui 只管"页面级轻动作"（引导 / 通知 / 跳转）。
+// 内容级渲染与用户选项（choices）统一归 render 契约（见 core/render），
+// 保证 choices 单一所有权，避免模型在两个工具间纠结。
+//
 // Field naming stays the same (ui/hint) so the existing front-end dispatcher is untouched.
 // We still avoid summarizeToolResult priority fields (trace/summary/message/error/detail/data)
 // and rely on safeStringify fallback to pass the full JSON through to the front-end.
@@ -16,14 +20,13 @@ import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
 export const showUiTool: ToolDefinition = {
   name: "show_ui",
   description:
-    "Interact with the user's page via a structured UI directive. Four modes:\n" +
+    "Interact with the user's page via a structured UI directive. Three modes:\n" +
     "- guide: scroll to + highlight a page area (target). Use when suggesting the user look at something.\n" +
-    "- choices: show clickable option buttons in the chat. Use when the user must pick from 2-6 options.\n" +
     "- notify: show a brief page toast. Use for status updates that don't require immediate action.\n" +
     "- open_link: open a URL or navigate to a route. Use to guide the user to a specific page.",
   parameters: z.object({
     mode: z
-      .enum(["guide", "choices", "notify", "open_link"])
+      .enum(["guide", "notify", "open_link"])
       .describe("Which UI action to perform"),
     // -- guide mode --
     target: z
@@ -34,24 +37,6 @@ export const showUiTool: ToolDefinition = {
       .string()
       .optional()
       .describe("[guide] One-line explanation shown on the tool card"),
-    // -- choices mode --
-    prompt: z
-      .string()
-      .optional()
-      .describe("[choices] Lead-in text before the buttons, e.g. 'Accept this quote?'"),
-    choices: z
-      .array(
-        z.object({
-          label: z.string(),
-          value: z.string(),
-          style: z
-            .enum(["default", "primary", "success", "warning", "danger"])
-            .optional(),
-        })
-      )
-      .max(6)
-      .optional()
-      .describe("[choices] 2-6 option buttons"),
     // -- notify mode --
     message: z
       .string()
@@ -100,24 +85,6 @@ export const showUiTool: ToolDefinition = {
         ok: true,
         ui: { type: "guide", target },
         hint: args.note || (label ? "Guide to " + label : "Guide to " + target),
-      };
-    }
-
-    // --- choices ---
-    if (mode === "choices") {
-      const choices = Array.isArray(args.choices) ? args.choices : [];
-      return {
-        ok: true,
-        ui: {
-          type: "choices",
-          prompt: String(args.prompt || ""),
-          choices: choices.map((c: any) => ({
-            label: String(c.label || ""),
-            value: String(c.value || c.label || ""),
-            style: c.style || "default",
-          })),
-        },
-        hint: args.prompt || choices.length + " options",
       };
     }
 

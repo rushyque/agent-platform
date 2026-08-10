@@ -61,7 +61,7 @@ agent-platform 不碰业务数据写操作。
 - `index.ts` — 导出 coreTools 对象（感知/记忆/人机/交互四组）
 - `interact.ts` — **交互工具集**（guide_user / present_choices / notify / open_link）
 - `observe-state.ts` — 运行态快照（需 context.getState 或 context.summarizeState）
-- `query-database/` — NL->SQL 只读查询（需 context.database）
+- `core/data/` — 通用数据查询能力：list_tables / describe_table / sample_rows / run_sql（需 AgentConfig.database 注入后端）
 - `recall.ts` — 回看历史工具结果
 - `notes.ts` — 线程便签（set_note / get_note）
 - `now.ts` — 权威时间
@@ -118,7 +118,7 @@ agent-platform 不碰业务数据写操作。
 
 ### 4.5 工具架构重构（Codex 原语化，本轮完成）
 对比 Codex 的工具哲学（少而通用的能力原语），发现中台工具存在三个结构问题并已修复：
-1. **NL→SQL 子 agent → 三原语**：删掉固定四阶段流水线，改为 list_tables / describe_table / run_sql 三个细粒度原语。模型自主探索库结构、自己写 SQL、自己看报错自己改。guardSQL 保留。mssql 适配器读 MS_Description 建立语义认知。
+1. **NL→SQL 子 agent → 数据查询原语**：删掉固定四阶段流水线，改为 list_tables / describe_table / sample_rows / run_sql 四个细粒度原语（见 src/core/data/）。模型自主探索库结构、自己写 SQL、自己看报错自己改。guardSQL 保留。mssql 适配器读 MS_Description 建立语义认知。
 2. **业务工具流程步骤 → 资源原语**：freight-inquiry 17→4（inquiry/email/quote/decision）；starlink 22→4（factory_ops/order/production/workshop）。每个用 mode 参数分发，engine 逻辑不变。
 3. **交互工具碎片 → show_ui**：guide_user/present_choices/notify/open_link 合并为一个 show_ui（mode 分发）。前端不受影响。
 4. **语义注释链**：`scripts/annotate-business-tables.ts`（`npm run db:annotate`）给业务库写 MS_Description，describe_table 读出来给模型看。

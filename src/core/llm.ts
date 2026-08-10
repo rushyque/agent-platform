@@ -19,8 +19,7 @@ export function reasoningEffortProviderOptions(): Record<string, unknown> {
 // 注入为标准 AI SDK reasoning-* 流事件（低层级 doStream 流）。
 //
 // 注意：此中间件用 v2 的 wrapStream 钩子，只拦截 doStream 路径。
-// generateObject 走 doGenerate，reasoning 提取不会触发——
-// NL→SQL 子 agent（generateObject）路径下推理过程不可见，但不影响 SQL 生成。
+// generateObject 走 doGenerate，reasoning 提取不会触发——结构提取（extract 等）路径下推理不可见。
 export const deepseekReasoningMiddleware = {
   middlewareVersion: "v2" as const,
   transformParams: async ({ params }: any) => ({

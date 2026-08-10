@@ -134,5 +134,5 @@ export function createCompactionMiddleware(opts?: { readonlyTools?: Set<string> 
   };
 }
 
-// 默认实例：无 per-run 只读映射时用（nl2sql/extract 等内部 generateObject 调用）。
+// 默认实例：无 per-run 只读映射时用（extract 等内部 generateObject 调用）。
 export const compactionMiddleware = createCompactionMiddleware();

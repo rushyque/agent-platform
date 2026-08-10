@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { CopilotRuntime } from "@copilotkit/runtime";
 import { BuiltInAgent, convertMessagesToVercelAISDKMessages } from "@copilotkit/runtime/v2";
 import { createCopilotNodeListener } from "@copilotkit/runtime/v2/node";
-import { tool, streamText, stepCountIs } from "ai";
+import { tool, streamText } from "ai";
 import { createLLMClient, reasoningEffortProviderOptions } from "./core/llm.js";
 import { resolveAgent, getAllAgentIds } from "./core/agent-router.js";
 import { listRuns } from "./persistence/run-store.js";
@@ -15,6 +15,13 @@ import { getEvents } from "./persistence/event-store.js";
 import { compactEvents, EventType } from "@ag-ui/client";
 import { extractToken, verifyToken } from "./core/middleware/auth.js";
 import { selectToolsForRun, createRunHooks } from "./core/middleware/index.js";
+import { createLoopGuard } from "./core/middleware/loop-guard.js";
+import {
+  checkRateLimit,
+  trackStart,
+  trackEnd,
+  rateLimitLog,
+} from "./core/middleware/rate-limit.js";
 import { handleProjectRoutes } from "./core/http-router.js";
 import { handleBenchRoutes } from "./bench/bench-routes.js";
 import {
@@ -32,6 +39,7 @@ import { settings } from "./config/settings.js";
 import { registerAllProjects } from "./projects/index.js";
 import type { ToolDefinition, AgentContext } from "./types/agent-config.js";
 import { insertArtifact, summarizeToolResult, getArtifact } from "./core/context/artifact-store.js";
+import { normalizeChoiceResponse } from "./core/render/index.js";
 import { DEFAULT_POLICY, getThreadSummary } from "./core/context/index.js";
 import { z } from "zod";
 
@@ -87,7 +95,7 @@ process.on("unhandledRejection", (err) => {
 });
 
 // DeepSeek LLM 客户端（createLLMClient + reasoning 中间件）已抽到 ./core/llm.ts，
-// 供 server（DAG / Hermes）与工具层（NL→SQL 子 agent）共用。
+// 供 server（DAG / Hermes）与工具层（extract 等 generateObject 结构提取）共用。
 
 // 中台级上下文管理约定：工具结果已外置，模型只看到 {ref,toolName,summary}，
 // 需要完整细节时调 getArtifact。追加到项目 systemPrompt 之后，让模型理解折叠格式。
@@ -99,11 +107,23 @@ const COMPACTION_GUIDE =
 
 // 工具优先纪律 —— 统一主题"外部确定性 > 内部猜测"：事实必须从工具/接口/计算来，不从模型脑子里来。
 // 与 COMPACTION_GUIDE 协调：鼓励"查证"但不鼓励"无意义重复查"（DeepSeek 倾向重复查是已知毛病）。
+// 注意区分问题类型：只对"需要事实/数据"的问题强制走工具；开放性问题（起草/解释/建议/头脑风暴）
+// 可直接用推理回答，不必强行套用工具 —— 否则模型一类高随机性问题就没法回答了。
 const TOOL_FIRST_GUIDE =
   "\n\n[工作纪律]\n" +
   "1. 事实来自工具：任何具体数据（数字、状态、记录）必须来自工具结果，禁止凭记忆或推测给出。\n" +
   "2. 关键结论交叉验证：重要判断（尤其涉及具体数值）建议用第二个工具或重查确认，不单凭一次结果。\n" +
-  "3. 不做无意义重复查询：已查过的相同信息不反复调用同一工具。";
+  "3. 不做无意义重复查询：已查过的相同信息不反复调用同一工具。\n" +
+  "4. 区分问题类型：需要真实数据/事实的问题必须先走工具拿到结果再作答；" +
+  "但开放性问题（起草文案、解释概念、给建议、头脑风暴、归纳总结）可以直接用推理回答，不必强行调用工具。";
+
+// 结构化输出约定：需要呈现结构化内容（表格/图表/Mermaid/选项/文档等）时，
+// 在助手自己的文本里用 <render>{json}</render> 内联声明（第一等输出），
+// 不要为此去调一个专门的渲染工具。所有前端按同一种契约消费。
+const STRUCTURED_OUTPUT_GUIDE =
+  "\n\n[结构化输出]\n" +
+  "要把内容结构化呈现给用户（表格、指标卡、图表、Mermaid、文档、选项按钮、Markdown 等）时，" +
+  "放在你的正常回复文本里即可，前端统一解析渲染；不要为此调用专门的渲染工具。一次可声明多个块（如先卡片总览、再表格明细）。";
 
 // 将 AgentConfig 的 ToolDefinition 转换为 AI SDK tool 记录。
 // 工具结果一律外置到 artifact 表，context 里只回 {ref, toolName, summary}；
@@ -158,6 +178,8 @@ function toAISDKTools(
                 return JSON.stringify({ ok: false, error: true, message: `工具执行异常: ${msg}` });
               }
               const execMs = Date.now() - t0;
+              // 工具结果统一按摘要外置（ref + summary）。只读结果的"完整保留"由转录/compactor 层保证，
+              // 这里不把超大结果内联回灌，避免多步聚合任务把上下文撑爆（实测可到 50 万+ 字符）。
               const summary = summarizeToolResult(result, DEFAULT_POLICY.toolResultSummaryChars);
               let ref: string | null = null;
               try {
@@ -292,7 +314,7 @@ const runtime = new CopilotRuntime({
       headers: Object.fromEntries(request.headers.entries()),
     });
     // 平台 meta 注入：若 AgentConfig 提供 database（DatabaseBackend），挂到 context，
-    // 供 query_database 工具从 context.database 取用（免项目在 resolveContext 手动塞）。
+    // 供 list_tables / describe_table / sample_rows / run_sql 从 context.database 取用（免项目在 resolveContext 手动塞）。
     if (config.database) context.database = config.database;
 
     // 6. 路由：DAG（Harness）vs BuiltInAgent（Hermes）
@@ -342,9 +364,19 @@ const runtime = new CopilotRuntime({
           return runWithCtx(
             { runId: input.runId, threadId: input.threadId, agentId, userId, traceId, route: "hermes" },
             () => {
+          // 用户选择交接：若最近一条用户消息是 `<CHOICE_SELECT .../>` 选择标记，
+          // 归一化为类型化文本，让模型明确知道用户选了哪个选项（不是靠文本回显猜）。
+          // normalizedMessages 同时用于意图分类 / prompt / hooks / 消息转换，保持单一口径。
+          const { messages: runMessages, choice } = normalizeChoiceResponse(input.messages);
+          if (choice) {
+            logger.for("Factory").info("choice handoff", {
+              agent: agentId, thread: input.threadId, value: choice.value,
+            });
+          }
+
           // 意图分类：项目可在 AgentConfig.classifyIntent 自带；缺省 "general"（平台不内置业务关键词）
           const intent = config.classifyIntent
-            ? config.classifyIntent({ messages: input.messages, context })
+            ? config.classifyIntent({ messages: runMessages, context })
             : "general";
 
           // 按意图选择工具子集
@@ -354,6 +386,10 @@ const runtime = new CopilotRuntime({
             context,
             override: config.selectTools,
           });
+          // 按意图解出采样温度：intentTemperature 优先 > temperature > 平台默认（createLLMClient 内部 0.2）。
+          // 数据/查询类低温度保真；开放/创作类可提温释放表达。undefined 时走平台默认，不透传也安全。
+          const effectiveTemperature =
+            config.intentTemperature?.[intent] ?? config.temperature;
 
           // 收集本 run 激活的只读工具名（按 ToolDefinition.readonly 声明），
           // 闭包传入 createLLMClient → 压缩中间件据此判定不折叠（命名关键词兜底）。
@@ -366,11 +402,12 @@ const runtime = new CopilotRuntime({
           const systemPrompt =
             config.buildSystemPrompt({
               context,
-              messages: input.messages,
+              messages: runMessages,
               intent,
             }) +
             COMPACTION_GUIDE +
             TOOL_FIRST_GUIDE +
+            STRUCTURED_OUTPUT_GUIDE +
             (prevSummary ? `\n\n[上一阶段摘要（本线程延续上下文）] ${prevSummary}` : "");
 
           const aiTools = {
@@ -394,13 +431,13 @@ const runtime = new CopilotRuntime({
               },
             }),
           };
-          const messages = convertMessagesToVercelAISDKMessages(input.messages);
+          const messages = convertMessagesToVercelAISDKMessages(runMessages);
           const hooks = createRunHooks({
             agentId,
             userId,
             threadId: input.threadId,
             runId: input.runId,
-            messages: input.messages,
+            messages: runMessages,
             model: config.model ?? settings.DEEPSEEK_MODEL,
             intent,
           });
@@ -457,14 +494,18 @@ const runtime = new CopilotRuntime({
           });
 
           return streamText({
-            model: createLLMClient(config.model, { readonlyTools }),
+            model: createLLMClient(config.model, {
+              readonlyTools,
+              temperature: effectiveTemperature,
+            }),
             ...reasoningEffortProviderOptions(),
             system: systemPrompt,
             // ai v5 与 CopilotKit 已对齐：ModelMessage[] 直接透传
             messages: messages as any,
             tools: aiTools,
             abortSignal,
-            stopWhen: stepCountIs(30),
+            // 通用循环止损：30 步硬上限 + 重复工具调用/重复文本提前中断（项目可经 config.loopGuard 覆盖）。
+            stopWhen: createLoopGuard(config.loopGuard),
             // 每步开始发射 run.llm_call（带该步输入与 stepNumber）——治此前多步 run 只抓首步 prompt。
             // prepareStep 是 AI SDK v5 原生钩子，每步 doStream 前调用、自带 stepNumber，无需自维护计数器。
             // 与下方 onStepFinish 的 run.llm_response（stepIndex 从 0 起）逐步成对，RunTrace 每步输入可见。
@@ -532,6 +573,24 @@ async function handleDebugRoutes(
       };
     });
     sendJson(res, 200, { agents });
+    return true;
+  }
+
+  // 按 ref 取回完整 artifact（工具结果的完整原始返回）。
+  // 前端拿到 TOOL_CALL_RESULT 的 {ref, summary} 后，若需要渲染完整内容
+  // （表/图/文档等大负载，summary 只带 200 字预览），调本接口取回完整 JSON。
+  const artMatch = pathname.match(/^\/debug\/api\/artifacts\/([^/]+)$/);
+  if (artMatch) {
+    try {
+      const art = await getArtifact(decodeURIComponent(artMatch[1]));
+      if (!art) {
+        sendJson(res, 404, { error: "artifact not found", ref: artMatch[1] });
+      } else {
+        sendJson(res, 200, { ref: art.ref, toolName: art.toolName, result: art.result });
+      }
+    } catch (err) {
+      sendJson(res, 500, { error: (err as Error).message, ref: artMatch[1] });
+    }
     return true;
   }
 
@@ -731,6 +790,20 @@ async function main() {
     }
 
     try {
+      // 限流与防滥用：基础配额 + /agent/* LLM 额外配额 + 全局并发兜底。
+      // 命中限制直接返回 429/503，不进入业务处理（防刷、防熔断）。
+      const clientIp = req.socket.remoteAddress || "unknown";
+      const limit = checkRateLimit(req, clientIp);
+      if (!limit.allowed) {
+        rateLimitLog(clientIp, req.url || "/", limit.status, limit.message);
+        res.setHeader("Retry-After", String(Math.ceil(limit.retryAfterMs / 1000)));
+        res.writeHead(limit.status, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: limit.message, code: "RATE_LIMITED" }));
+        return;
+      }
+      trackStart();
+      res.on("close", trackEnd);
+
       // 调试控制台：静态页 + 只读 API（命中则不进 CopilotKit listener）
       const url = new URL(req.url || "/", "http://localhost");
       trackRequest(req, res, url.pathname);

@@ -42,6 +42,12 @@ const envSchema = z.object({
     .default("true"),
   // 可选 admin token；配置后 /observe/stream 与 /console/api/* 需带 ?token= 或 Authorization。
   OBSERVE_TOKEN: z.string().optional(),
+  // 限流与防滥用（见 core/middleware/rate-limit.ts）：
+  // 滑动窗口（毫秒）内，单 IP 基础配额与 /agent/* LLM 入口额外配额；全局并发上限兜底。
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
+  RATE_LIMIT_MAX: z.coerce.number().default(300),
+  RATE_LIMIT_AGENT_MAX: z.coerce.number().default(20),
+  RATE_LIMIT_CONCURRENCY: z.coerce.number().default(50),
 });
 
 const __raw = envSchema.parse(process.env);
@@ -58,4 +64,9 @@ export const settings = {
   // socketTimeout≈旧 requestTimeout(15s)；poolTimeout 防 DB 卡住时取池无限挂。
   HARNESS_DATABASE_URL:
     `sqlserver://${__raw.DB_HOST}:${__raw.DB_PORT};database=${__raw.HARNESS_DB_NAME};user=${__raw.DB_USER};password=${__raw.DB_PASSWORD};encrypt=false;trustServerCertificate=true;schema=dbo;connectTimeout=5;socketTimeout=15;poolTimeout=10`,
+  // 限流配置（透传 + 默认值兜底，供 rate-limit.ts 使用）
+  RATE_LIMIT_WINDOW_MS: __raw.RATE_LIMIT_WINDOW_MS,
+  RATE_LIMIT_MAX: __raw.RATE_LIMIT_MAX,
+  RATE_LIMIT_AGENT_MAX: __raw.RATE_LIMIT_AGENT_MAX,
+  RATE_LIMIT_CONCURRENCY: __raw.RATE_LIMIT_CONCURRENCY,
 };

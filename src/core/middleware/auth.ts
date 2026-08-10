@@ -13,9 +13,12 @@ export function verifyToken(
 ): { userId: string; [key: string]: any } | null {
   try {
     const decoded = jwt.verify(token, secret) as any;
+    // userId 一律归一为字符串：业务 JWT 的 sub/id 常为数字（如 SQL 主键），
+    // 而审计表的 userId 列是字符串。不归一会在 recordRun 落库时被 Prisma 拒绝。
+    const userId = String(decoded.id ?? decoded.userId ?? decoded.sub ?? "");
     return {
-      userId: decoded.id || decoded.userId || decoded.sub || "",
       ...decoded,
+      userId,
     };
   } catch {
     return null;

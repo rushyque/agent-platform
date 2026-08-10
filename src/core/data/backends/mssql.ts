@@ -1,14 +1,15 @@
+// MSSQL 数据查询后端驱动（可选：接入方显式选用）。
+// 通过 MS_Description 语义注释给模型提供"数据库素养"，而不是裸的列名。
+// 本适配器复用平台业务连接池（persistence/db.ts）；接入方也可自实现 DatabaseBackend
+// 包装自己的只读查询网关/权限体系。
+
 import { getPool, sql } from "../../../persistence/db.js";
 import type {
   DatabaseBackend,
   TableSchema,
   QueryResult,
   ColumnSchema,
-} from "../query-database/backend.js";
-
-// MSSQL adapter -- reads MS_Description (semantic annotations) via sys.extended_properties.
-// listTables/describeTable now return business-level descriptions alongside column metadata,
-// giving the model real "database literacy" instead of raw column names.
+} from "../backend.js";
 
 export interface MssqlBackendOptions {
   /** Whitelist: only expose these tables (case-insensitive). Default = all user tables. */

@@ -1,5 +1,5 @@
-// guardSQL —— NL→SQL 的安全闸门：拦截一切写/破坏操作。
-// query_database 是只读查询工具，绝不执行 DML/DDL/权限/过程调用。
+// guardSQL —— 数据查询能力（run_sql）的安全闸门：拦截一切写/破坏操作。
+// run_sql 是只读查询原语，绝不执行 DML/DDL/权限/过程调用。
 
 const FORBIDDEN: Array<{ re: RegExp; label: string }> = [
   { re: /\binsert\s+into\b/i, label: "INSERT" },
@@ -28,12 +28,12 @@ function stripComments(sql: string): string {
     .replace(/--.*$/gm, " ");
 }
 
+/** 只读 SQL 白名单守卫：拒绝一切写/破坏操作，且顶层必须是 SELECT 或 WITH(CTE)。 */
 export function guardSQL(sql: string): GuardResult {
   const text = stripComments(sql ?? "");
   for (const { re, label } of FORBIDDEN) {
     if (re.test(text)) return { ok: false, reason: `禁止的写/破坏操作：${label}` };
   }
-  // 顶层必须是 SELECT 或 WITH(CTE)
   if (!/^\s*\(?\s*(select|with)\b/i.test(text)) {
     return { ok: false, reason: "只允许 SELECT 或 WITH(CTE) 只读查询" };
   }

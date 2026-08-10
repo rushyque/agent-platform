@@ -82,7 +82,7 @@ export const getNoteTool: ToolDefinition = {
       const content = notes.get(args.key);
       return content != null
         ? { ok: true, key: args.key, content }
-        : { ok: false, message: `无此便签: ${args.key}` };
+        : { ok: false, error: `无此便签: ${args.key}` };
     }
     const all = Array.from(notes.entries()).map(([k, v]) => ({ key: k, content: v }));
     return { ok: true, count: all.length, notes: all };
