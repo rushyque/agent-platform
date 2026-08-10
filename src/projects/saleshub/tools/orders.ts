@@ -70,7 +70,7 @@ export const orderDetailTool: ToolDefinition = {
       // Resolve order id by number via list+filter, then take the first match.
       const orders = await hubFetch<any[]>(ctx, "/api/orders/filter", {
         method: "POST",
-        body: JSON.stringify({ orderNo: String(args.orderNo), limit: 5 }),
+        body: JSON.stringify({ orderNo: String(args.orderNo) }),
       });
       if (!Array.isArray(orders) || orders.length === 0) {
         return { ok: false, message: `未找到工单 ${args.orderNo}` };
