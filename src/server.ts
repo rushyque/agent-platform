@@ -42,12 +42,19 @@ import { stageToolResult, getArtifact } from "./core/context/artifact-store.js";
 import { normalizeChoiceResponse } from "./core/render/index.js";
 import { DEFAULT_POLICY, getThreadSummary } from "./core/context/index.js";
 import {
+  createToolDedupCache,
+  replayDedup,
+  schemaKeys,
+  toolSignature,
+} from "./core/middleware/tool-dedup.js";
+import {
   composePrompt,
   compactionProtocol,
   choicesProtocol,
   toolFirstProtocol,
   structuredOutputGuide,
 } from "./core/prompt/index.js";
+import { renderBlocksToText, validateBlocks } from "./core/render/index.js";
 import { z } from "zod";
 
 // 进程级兜底：底层 tedious 在 MSSQL 登录失败/断连时会 emit 无监听器的 'error' 事件，
@@ -112,7 +119,8 @@ function toAISDKTools(
   context: AgentContext,
   threadId: string,
   runId: string,
-  agentId: string
+  agentId: string,
+  dedupCache?: Map<string, { result: unknown; inline: boolean }>
 ): Record<string, any> {
   return Object.fromEntries(
     configTools.map((t) => [
@@ -122,6 +130,25 @@ function toAISDKTools(
         inputSchema: t.parameters,
         execute: async (args: any) => {
           const ctx = { runId, threadId, agentId };
+          // 同签名幂等去重：命中则回放上次内联结果，不再重跑后端查询。
+          if (dedupCache && t.readonly) {
+            const keys = schemaKeys(t.parameters);
+            const hit = replayDedup(dedupCache, t.name, args, keys);
+            if (hit) {
+              logEvent({
+                level: "info",
+                source: "tool",
+                event: "tool_dedup_replay",
+                message: "同签名工具结果去重回放",
+                data: { tool: t.name, args },
+              });
+              observeBus.emit("runs", "run.tool_result", {
+                runId, threadId, agentId, toolName: t.name,
+                execMs: 0, summary: "去重回放（同签名内联结果）", ref: null, inline: true,
+              });
+              return hit.replay;
+            }
+          }
           // 包进 ALS：工具体内（含其同步/异步子调用）的 logger 自动带 runId 归属。
           return runWithCtx(
             { ...ctx, userId: context.userId, route: "hermes" },
@@ -187,6 +214,9 @@ function toAISDKTools(
                 runId, threadId, agentId, toolName: t.name, execMs,
                 summary: staged.summary, ref: staged.ref, inline: staged.inline,
               });
+              if (dedupCache && t.readonly && staged.inline) {
+                dedupCache.set(toolSignature(t.name, args), { result, inline: true });
+              }
               // 内联 → 回完整 result；外置 → 只回 ref + summary，并显式 full:false，
               // 让模型清楚"手上只有摘要、可按需取回"，消除"分不清是否已有数据"的重查歧义。
               return JSON.stringify(
@@ -396,8 +426,11 @@ const runtime = new CopilotRuntime({
               : undefined,
           ]);
 
+          // 本次 run 的工具去重缓存：同签名只读查询第二次命中即回放上次内联结果，
+          // 不再重跑后端（见 middleware/tool-dedup.ts）。
+          const dedupCache = createToolDedupCache();
           const aiTools = {
-            ...toAISDKTools(activeTools, context, input.threadId, input.runId, agentId),
+            ...toAISDKTools(activeTools, context, input.threadId, input.runId, agentId, dedupCache),
             // 取回工具：当 compactor 把老 tool-result 折叠成 [已折叠 ... ref=art-xxx] 后，
             // 模型若需要其完整细节，主动调用本工具按 ref 拉取，而非被动背着完整结果。
             getArtifact: tool({
@@ -416,6 +449,47 @@ const runtime = new CopilotRuntime({
                 }
               },
             }),
+            // render 兜底护栏：本平台默认"文本内联 <render>{json}</render>"是第一等输出
+            // （前端统一解析，零截断）。若项目未装配 render 工具而模型仍把 render 当工具调用，
+            // 这里不放行（避免前端无法消费 ui.render），而是把 blocks 转回内联文本并明确
+            // 要求模型改以正文输出，从而让 render 通道的决定性自纠替代随机的"有时自纠、有时
+            // 退化成纯文本"。项目已装配 render 工具时不会走到这里（下方按名称豁免）。
+            ...(activeTools.some((t) => t.name === "render")
+              ? {}
+              : {
+                  render: tool({
+                    description:
+                      "系统提示：本系统未装配 render 工具，不得把 render 当作工具调用。" +
+                      "所有表格/指标卡/图表/选项等结构化内容，都必须在回复正文里用 <render>{json}</render> 内联输出。",
+                    inputSchema: z.object({
+                      blocks: z
+                        .array(z.any())
+                        .describe("你本打算渲染的块数组，会被原样转换成内联 <render> 回给你"),
+                    }),
+                    execute: async ({ blocks }: { blocks: any[] }) => {
+                      logEvent({
+                        level: "info",
+                        source: "tool",
+                        event: "render_tool_guard",
+                        message: "模型把 render 当工具调用，已转内联文本提示其改正文输出",
+                        data: { blockCount: Array.isArray(blocks) ? blocks.length : 0 },
+                      });
+                      let inline: string;
+                      try {
+                        const valid = validateBlocks(blocks);
+                        inline = renderBlocksToText(valid);
+                      } catch {
+                        inline = JSON.stringify(blocks ?? []);
+                      }
+                      return (
+                        `[内联引导] 本系统未装配 render 工具，请勿把 render 当作工具调用。` +
+                        `以下内容应作为你的回复正文直接输出（含首尾 <render> 标签原样保留，前端会解析）：\n\n` +
+                        `${inline}\n\n` +
+                        `请在你的回复文本里输出这一整段 <render>{json}</render>，不要再调用 render 或任何其它工具来呈现它。`
+                      );
+                    },
+                  }),
+                }),
           };
           const messages = convertMessagesToVercelAISDKMessages(runMessages);
           const hooks = createRunHooks({
