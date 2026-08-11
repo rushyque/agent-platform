@@ -3,6 +3,10 @@ import { logger } from "../../observe/logger.js";
 
 const log = logger.for("artifact-store");
 
+// 默认工具结果摘要上限（与 CompactionPolicy.toolResultSummaryChars 对齐；
+// 在此单列以避免 stageToolResult 反向依赖 policy）。
+const DEFAULT_TOOL_SUMMARY_CHARS = 200;
+
 // 工具结果外置 —— Prisma(ai_harness_db.artifacts) + 内存 LRU 热缓存。
 // getArtifact 高频被模型调用 → 内存命中省 DB 随机读，未命中查 DB 回填。
 // 写：内存立即存（保证外置 ref 一定能取回，与 server.ts 降级语义一致），DB 写 fire-and-forget
@@ -200,5 +204,62 @@ export async function listArtifacts(opts?: {
       err: err instanceof Error ? err.message : String(err),
     });
     return [];
+  }
+}
+
+// ---- 工具结果分级（内联 vs 外置）----
+//
+// 编排层（领域工具行数/列投影 + run_sql TOP 上限）已保证结果尺度小，默认把结果
+// 完整内联回上下文，模型拿到全量数据即可直接作答，不必重查/取回（治"折叠→重查"
+// 绕圈）。仅当结果串行化超过预算时，才外置为 {ref, summary, full:false} 安全阀。
+// Hermes（server.ts）与 DAG（dag-executor.ts）共用，保证两条链路一致。
+
+export interface StageResult {
+  /** true → 调用方应把原始 result 完整内联给模型（已含全量数据） */
+  inline: boolean;
+  /** 外置成功时的 ref；inline=true 时为 null */
+  ref: string | null;
+  /** 工具结果的摘要文本（内联时也计算，供 trace/审计展示用） */
+  summary: string;
+}
+
+export async function stageToolResult(result: unknown, opts: {
+  maxInlineChars: number;
+  threadId?: string | null;
+  runId?: string | null;
+  toolName: string;
+  args?: unknown;
+  summaryChars?: number;
+}): Promise<StageResult> {
+  const summary = summarizeToolResult(
+    result,
+    opts.summaryChars ?? DEFAULT_TOOL_SUMMARY_CHARS
+  );
+  let size = 0;
+  try {
+    size = safeStringify(result).length;
+  } catch {
+    size = Number.MAX_SAFE_INTEGER;
+  }
+  if (size <= opts.maxInlineChars) {
+    return { inline: true, ref: null, summary };
+  }
+  try {
+    const ref = await insertArtifact({
+      threadId: opts.threadId ?? null,
+      runId: opts.runId ?? null,
+      toolName: opts.toolName,
+      args: opts.args,
+      result,
+      summary,
+    });
+    return { inline: false, ref, summary };
+  } catch (err) {
+    logger.for("artifact").error("stageToolResult insert failed", {
+      tool: opts.toolName,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    // 外置失败 → 降级内联，绝不阻塞工具调用。
+    return { inline: true, ref: null, summary };
   }
 }

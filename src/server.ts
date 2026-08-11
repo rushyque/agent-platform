@@ -38,9 +38,16 @@ import { startCleanup } from "./persistence/cleanup.js";
 import { settings } from "./config/settings.js";
 import { registerAllProjects } from "./projects/index.js";
 import type { ToolDefinition, AgentContext } from "./types/agent-config.js";
-import { insertArtifact, summarizeToolResult, getArtifact } from "./core/context/artifact-store.js";
+import { stageToolResult, getArtifact } from "./core/context/artifact-store.js";
 import { normalizeChoiceResponse } from "./core/render/index.js";
 import { DEFAULT_POLICY, getThreadSummary } from "./core/context/index.js";
+import {
+  composePrompt,
+  compactionProtocol,
+  choicesProtocol,
+  toolFirstProtocol,
+  structuredOutputGuide,
+} from "./core/prompt/index.js";
 import { z } from "zod";
 
 // 进程级兜底：底层 tedious 在 MSSQL 登录失败/断连时会 emit 无监听器的 'error' 事件，
@@ -97,34 +104,6 @@ process.on("unhandledRejection", (err) => {
 // DeepSeek LLM 客户端（createLLMClient + reasoning 中间件）已抽到 ./core/llm.ts，
 // 供 server（DAG / Hermes）与工具层（extract 等 generateObject 结构提取）共用。
 
-// 中台级上下文管理约定：工具结果已外置，模型只看到 {ref,toolName,summary}，
-// 需要完整细节时调 getArtifact。追加到项目 systemPrompt 之后，让模型理解折叠格式。
-const COMPACTION_GUIDE =
-  "\n\n[上下文管理约定] 为避免上下文膨胀，较老的工具结果会被折叠为短摘要。" +
-  "若某个工具结果以 {ref, toolName, summary} 形式返回、或折叠占位里明确带 ref=art-xxx，" +
-  "你可以调用 getArtifact(ref) 取回其完整数据；占位里没有 ref 时说明未持久化、无法取回，直接基于摘要推进。" +
-  "优先基于已有信息推进任务，不要重复查看相同内容，不要在没有有效 ref 时调用 getArtifact。";
-
-// 工具优先纪律 —— 统一主题"外部确定性 > 内部猜测"：事实必须从工具/接口/计算来，不从模型脑子里来。
-// 与 COMPACTION_GUIDE 协调：鼓励"查证"但不鼓励"无意义重复查"（DeepSeek 倾向重复查是已知毛病）。
-// 注意区分问题类型：只对"需要事实/数据"的问题强制走工具；开放性问题（起草/解释/建议/头脑风暴）
-// 可直接用推理回答，不必强行套用工具 —— 否则模型一类高随机性问题就没法回答了。
-const TOOL_FIRST_GUIDE =
-  "\n\n[工作纪律]\n" +
-  "1. 事实来自工具：任何具体数据（数字、状态、记录）必须来自工具结果，禁止凭记忆或推测给出。\n" +
-  "2. 关键结论交叉验证：重要判断（尤其涉及具体数值）建议用第二个工具或重查确认，不单凭一次结果。\n" +
-  "3. 不做无意义重复查询：已查过的相同信息不反复调用同一工具。\n" +
-  "4. 区分问题类型：需要真实数据/事实的问题必须先走工具拿到结果再作答；" +
-  "但开放性问题（起草文案、解释概念、给建议、头脑风暴、归纳总结）可以直接用推理回答，不必强行调用工具。";
-
-// 结构化输出约定：需要呈现结构化内容（表格/图表/Mermaid/选项/文档等）时，
-// 在助手自己的文本里用 <render>{json}</render> 内联声明（第一等输出），
-// 不要为此去调一个专门的渲染工具。所有前端按同一种契约消费。
-const STRUCTURED_OUTPUT_GUIDE =
-  "\n\n[结构化输出]\n" +
-  "要把内容结构化呈现给用户（表格、指标卡、图表、Mermaid、文档、选项按钮、Markdown 等）时，" +
-  "放在你的正常回复文本里即可，前端统一解析渲染；不要为此调用专门的渲染工具。一次可声明多个块（如先卡片总览、再表格明细）。";
-
 // 将 AgentConfig 的 ToolDefinition 转换为 AI SDK tool 记录。
 // 工具结果一律外置到 artifact 表，context 里只回 {ref, toolName, summary}；
 // 模型需要完整数据时调 getArtifact(ref) 取回（见 factory 内注入）。
@@ -178,22 +157,18 @@ function toAISDKTools(
                 return JSON.stringify({ ok: false, error: true, message: `工具执行异常: ${msg}` });
               }
               const execMs = Date.now() - t0;
-              // 工具结果统一按摘要外置（ref + summary）。只读结果的"完整保留"由转录/compactor 层保证，
-              // 这里不把超大结果内联回灌，避免多步聚合任务把上下文撑爆（实测可到 50 万+ 字符）。
-              const summary = summarizeToolResult(result, DEFAULT_POLICY.toolResultSummaryChars);
-              let ref: string | null = null;
-              try {
-                ref = await insertArtifact({
-                  threadId,
-                  runId,
-                  toolName: t.name,
-                  args,
-                  result,
-                  summary,
-                });
-              } catch (err) {
-                logger.for("artifact").error("insert failed, fallback to inline", { tool: t.name, err: (err as Error).message });
-              }
+              // 工具结果分级：结果在预算内直接完整内联回上下文（模型拿到全量即可作答，
+              // 不必重查/取回，治绕圈）；超过预算才外置为 {ref, summary, full:false} 安全阀。
+              // 编排层（领域工具行数/列投影 + run_sql TOP 上限）已保证典型结果尺度小，
+              // 内联是默认路径，外置降级为真正溢出时防护。
+              const staged = await stageToolResult(result, {
+                maxInlineChars: settings.TOOL_INLINE_MAX_CHARS,
+                threadId,
+                runId,
+                toolName: t.name,
+                args,
+                summaryChars: DEFAULT_POLICY.toolResultSummaryChars,
+              });
               logEvent({
                 level: "info",
                 source: "tool",
@@ -203,15 +178,22 @@ function toAISDKTools(
                   tool: t.name,
                   duration_ms: execMs,
                   result_chars: JSON.stringify(result).length,
-                  summary_chars: summary.length,
-                  stored: !!ref,
+                  inline: staged.inline,
+                  summary_chars: staged.summary.length,
+                  stored: !!staged.ref,
                 },
               });
               observeBus.emit("runs", "run.tool_result", {
-                runId, threadId, agentId, toolName: t.name, execMs, summary, ref,
+                runId, threadId, agentId, toolName: t.name, execMs,
+                summary: staged.summary, ref: staged.ref, inline: staged.inline,
               });
-              // 外置成功 → 只回 ref + summary；失败 → 回完整结果（降级，绝不阻塞工具调用）
-              return JSON.stringify(ref ? { ref, toolName: t.name, summary } : result);
+              // 内联 → 回完整 result；外置 → 只回 ref + summary，并显式 full:false，
+              // 让模型清楚"手上只有摘要、可按需取回"，消除"分不清是否已有数据"的重查歧义。
+              return JSON.stringify(
+                staged.inline
+                  ? result
+                  : { ref: staged.ref, toolName: t.name, summary: staged.summary, full: false }
+              );
             }
           );
         },
@@ -399,16 +381,20 @@ const runtime = new CopilotRuntime({
 
           // 构建 system prompt（透传 intent，避免重复分类）+ 中台级上下文管理约定
           const prevSummary = getThreadSummary(input.threadId);
-          const systemPrompt =
+          const systemPrompt = composePrompt([
             config.buildSystemPrompt({
               context,
               messages: runMessages,
               intent,
-            }) +
-            COMPACTION_GUIDE +
-            TOOL_FIRST_GUIDE +
-            STRUCTURED_OUTPUT_GUIDE +
-            (prevSummary ? `\n\n[上一阶段摘要（本线程延续上下文）] ${prevSummary}` : "");
+            }),
+            compactionProtocol(),
+            toolFirstProtocol(),
+            structuredOutputGuide(),
+            choicesProtocol(),
+            prevSummary
+              ? `[上一阶段摘要（本线程延续上下文）]\n${prevSummary}`
+              : undefined,
+          ]);
 
           const aiTools = {
             ...toAISDKTools(activeTools, context, input.threadId, input.runId, agentId),

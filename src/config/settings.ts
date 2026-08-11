@@ -48,6 +48,11 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().default(300),
   RATE_LIMIT_AGENT_MAX: z.coerce.number().default(20),
   RATE_LIMIT_CONCURRENCY: z.coerce.number().default(50),
+  // 工具结果内联预算（字符）：结果串行化长度 <= 该值则直接完整内联回上下文，
+  // 模型拿到全量数据即可直接作答，不必重查/取回；超过才外置为 {ref, summary, full:false}。
+  // 设计依据：编排层（领域工具行数/列投影 + run_sql TOP 上限）已保证结果尺度小，
+  // 内联是"信任编排"的默认路径，外置降级为真正溢出时的安全阀。
+  TOOL_INLINE_MAX_CHARS: z.coerce.number().default(12000),
 });
 
 const __raw = envSchema.parse(process.env);
@@ -69,4 +74,5 @@ export const settings = {
   RATE_LIMIT_MAX: __raw.RATE_LIMIT_MAX,
   RATE_LIMIT_AGENT_MAX: __raw.RATE_LIMIT_AGENT_MAX,
   RATE_LIMIT_CONCURRENCY: __raw.RATE_LIMIT_CONCURRENCY,
+  TOOL_INLINE_MAX_CHARS: __raw.TOOL_INLINE_MAX_CHARS,
 };

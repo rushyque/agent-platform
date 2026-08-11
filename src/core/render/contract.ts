@@ -14,12 +14,24 @@ import { z } from "zod";
 
 // -- 单个选项（choices / 表单用）--
 export const choiceSchema = z.object({
-  label: z.string().describe("选项显示文本"),
+  label: z.string().describe("选项显示文本，简洁，动词开头"),
   value: z.string().describe("点击后发给模型的取值"),
   style: z
     .enum(["default", "primary", "success", "warning", "danger"])
     .optional()
     .describe("提示性样式，前端可按自己设计取舍"),
+  icon: z
+    .string()
+    .optional()
+    .describe("图标标识符（如 mdi:chart-bar），前端有图标库时渲染"),
+  description: z
+    .string()
+    .optional()
+    .describe("选项下方一行描述文字，用于补充上下文"),
+  recommended: z
+    .boolean()
+    .optional()
+    .describe("是否推荐该项（放第一位并做 (推荐) 标记，温和引导）"),
 });
 export type Choice = z.infer<typeof choiceSchema>;
 
@@ -90,11 +102,32 @@ const documentBlockSchema = z.object({
   sections: z.array(documentSectionSchema),
 });
 
-// -- 用户选项（像 Claude 的选择按钮）--
+// -- 用户选项（像 Claude 的建议回复按钮）--
 const choicesBlockSchema = z.object({
   kind: z.literal("choices"),
+  header: z
+    .string()
+    .max(12)
+    .optional()
+    .describe("语义短标签（最多 12 字符），如「查询口径」「时间范围」，渲染在问题上方的小 chip"),
   prompt: z.string().optional(),
-  choices: z.array(choiceSchema).min(1).max(6),
+  choiceId: z
+    .string()
+    .optional()
+    .describe("选项组唯一标识，前端 CHOICE_SELECT 回传时携带以便中台归一化"),
+  dismissPolicy: z
+    .enum(["on_select", "on_type", "on_send"])
+    .optional()
+    .describe("消失策略：on_select=选择后消失(默认)，on_type=用户开始输入时消失，on_send=用户发送任意消息后消失"),
+  choices: z.array(choiceSchema).min(1).max(4).describe("候选选项，2-3 个最佳。单选时点选即发，多选时勾选多个"),
+  multiple: z
+    .boolean()
+    .optional()
+    .describe("是否允许多选；缺省为单选。仅在你确实需要同时看多个维度/对象时置 true"),
+  allowCustom: z
+    .boolean()
+    .optional()
+    .describe("是否提示用户可用自由输入代替选项；缺省 true。不要为关闭而关闭，给用户自由表达空间"),
 });
 
 // -- 纯 Markdown 文本 --
@@ -141,7 +174,7 @@ export const RENDER_KIND_LABELS: Record<RenderBlockKind, string> = {
   chart: "图表（bar/line/pie/area）",
   mermaid: "Mermaid 图",
   document: "结构化文档",
-  choices: "用户选项按钮",
+  choices: "建议选项（2-4 个，Claude 式建议回复）",
   markdown: "Markdown 文本",
   link: "跳转链接",
   notify: "页面通知(toast)",

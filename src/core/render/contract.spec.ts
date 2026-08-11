@@ -37,3 +37,20 @@ test("validateBlocks: 拒绝缺失必填字段", () => {
     /label/
   );
 });
+
+test("validateBlocks: choices 接受 header 与 recommended 字段", () => {
+  const [b] = validateBlocks([
+    {
+      kind: "choices",
+      header: "查询口径",
+      prompt: "想按哪个口径查询？",
+      choices: [
+        { label: "按工单日期", value: "工单日期", recommended: true, description: "默认" },
+        { label: "按状态变更", value: "状态变更" },
+      ],
+    },
+  ]);
+  assert.equal(b.kind, "choices");
+  assert.equal(b.header, "查询口径");
+  assert.equal(b.choices[0].recommended, true);
+});

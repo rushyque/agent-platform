@@ -9,11 +9,12 @@ import type {
   AgentContext,
 } from "../../types/agent-config.js";
 import { saveCheckpoint } from "./checkpoint.js";
-import { insertArtifact, summarizeToolResult } from "../context/artifact-store.js";
+import { stageToolResult } from "../context/artifact-store.js";
 import { DEFAULT_POLICY } from "../context/policy.js";
 import { observeBus } from "../../observe/bus.js";
 import { logger } from "../../observe/logger.js";
 import { reasoningEffortProviderOptions } from "../llm.js";
+import { settings } from "../../config/settings.js";
 
 // DAG 执行上下文
 export interface DAGExecutionContext {
@@ -160,31 +161,28 @@ async function executeToolStep(
 
   const result = await tool.execute(args, ctx.context);
 
-  // 工具结果外置：完整结果落 artifact 表，emit 只发 ref+summary。
+  // 工具结果分级（与 Hermes 路径一致）：预算内完整内联，超过才外置为 {ref,summary,full:false}。
   // state 仍存完整 result —— DAG 为确定性编排、步数有限，后续 LLM 步用 ${state.stepId} 插值需要完整数据。
-  const summary = summarizeToolResult(result, DEFAULT_POLICY.toolResultSummaryChars);
-  let ref: string | null = null;
-  try {
-    ref = await insertArtifact({
-      threadId: ctx.threadId,
-      runId: ctx.runId,
-      toolName: tool.name,
-      args,
-      result,
-      summary,
-    });
-  } catch (err) {
-    logger.for("DAG artifact").error("insert failed", { tool: tool.name, err: (err as Error).message });
-  }
-  const emitted = ref ? { ref, toolName: tool.name, summary } : result;
+  const staged = await stageToolResult(result, {
+    maxInlineChars: settings.TOOL_INLINE_MAX_CHARS,
+    threadId: ctx.threadId,
+    runId: ctx.runId,
+    toolName: tool.name,
+    args,
+    summaryChars: DEFAULT_POLICY.toolResultSummaryChars,
+  });
+  const emitted = staged.inline
+    ? result
+    : { ref: staged.ref, toolName: tool.name, summary: staged.summary, full: false };
   observeBus.emit("runs", "run.tool_result", {
     runId: ctx.runId,
     threadId: ctx.threadId,
     agentId: ctx.agentId,
     toolName: tool.name,
     execMs: Date.now() - t0,
-    summary,
-    ref,
+    summary: staged.summary,
+    ref: staged.ref,
+    inline: staged.inline,
   });
 
   ctx.emit({

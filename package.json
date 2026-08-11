@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "test": "tsx --test src/core/data/*.spec.ts src/core/render/*.spec.ts",
+    "test": "tsx --test src/core/data/*.spec.ts src/core/render/*.spec.ts src/core/prompt/*.spec.ts src/core/context/*.spec.ts",
     "start": "node dist/server.js",
     "go": "node scripts/go.mjs",
     "go:prod": "node scripts/go.mjs prod",
