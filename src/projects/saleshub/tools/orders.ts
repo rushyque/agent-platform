@@ -9,7 +9,9 @@ export const listOrdersTool: ToolDefinition = {
     "返回订单号、客户、销售员、金额（总额/已收/余额）、币种、状态、下单日期、发货日期。" +
     "支持按订单号、客户名、状态、下单日期范围（startDate/endDate）过滤。" +
     "日期用 YYYY-MM-DD，或直接传整月如 startDate='2026-07-01', endDate='2026-07-31' 表示某月。" +
-    "用于回答「我的订单有哪些」「最近订单」「某客户订单」「某月订单」等问题。",
+    "注意：本工具最多返回 50 条（有行数上限），只适合看明细；" +
+    "「有多少单 / 总额多少 / 按状态或业务员分布」这类聚合统计请用 saleshub_order_stats，" +
+    "不要用本列表手动累加。用于回答「我的订单有哪些」「最近订单」「某客户订单」「某月订单」等问题。",
   parameters: z.object({
     orderNo: z.string().optional().describe("工单号/订单号，精确匹配，如 24CMRD1224"),
     customer: z.string().optional().describe("客户名，模糊匹配"),
@@ -135,6 +137,8 @@ export const orderStatsTool: ToolDefinition = {
     "统计当前用户可见订单的聚合数据：订单数、总额、已收/未收金额，" +
     "以及按状态、按业务员、按币种的分组。" +
     "支持按下单日期范围（startDate/endDate，YYYY-MM-DD）、客户、状态过滤，沿用当前用户的权限范围。" +
+    "注意：所有分组（byStatus/bySalesPerson/byCurrency）都是在过滤后计算的结果；" +
+    "返回值里带 filterApplied 字段自证实际生效的口径（含是否按当前用户范围裁剪）。" +
     "用于一次性回答「某月/某段期间有多少单、总额多少、已收未收多少、按状态/业务员/币种分布」等统计类问题，" +
     "不必再靠拉取订单列表逐条累加。金额跨币种时以 byCurrency 为准。",
   parameters: z.object({
