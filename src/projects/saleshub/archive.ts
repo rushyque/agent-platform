@@ -19,6 +19,7 @@ interface ToolResultArg {
 
 interface Step {
   text?: string;
+  reasoningText?: string;
   toolCalls?: ToolCallArg[];
   toolResults?: ToolResultArg[];
 }
@@ -48,6 +49,7 @@ export async function archiveRun(
     content: string;
     final_answer?: string;
     render_components?: string;
+    reasoning?: string;
   }> = [];
 
   // 本轮用户消息（含选择交接标记的归一化内容）
@@ -60,8 +62,12 @@ export async function archiveRun(
 
   // assistant 输出：按步骤累积正文 + 从 steps 提取最终答案落库
   let assistantText = "";
+  let assistantReasoning = "";
   for (const step of Array.isArray(steps) ? steps : []) {
     if (typeof step?.text === "string" && step.text.trim()) assistantText += step.text;
+    if (typeof step?.reasoningText === "string" && step.reasoningText.trim()) {
+      assistantReasoning += step.reasoningText;
+    }
   }
   if (assistantText.trim()) {
     const finalAnswer = extractFinalAnswer(assistantText);
@@ -70,6 +76,7 @@ export async function archiveRun(
       content: assistantText,
       final_answer: finalAnswer,
       render_components: extractRenderComponents(assistantText),
+      reasoning: assistantReasoning.trim() || undefined,
     });
   }
 
