@@ -16,6 +16,8 @@ import { setNoteTool, getNoteTool } from "./notes.js";
 import { nowTool } from "./now.js";
 import { confirmTool } from "./confirm.js";
 import { showUiTool, interactionTools } from "./interact.js";
+import { uiClickTool, uiInteractionTools } from "./ui-click.js";
+import { uiFillTool, uiFillTools } from "./ui-fill.js";
 import { renderTool } from "../render/tool.js";
 
 export const coreTools = {
@@ -39,6 +41,12 @@ export const coreTools = {
 
   // --- front-end interaction (single tool, 3 page-level modes) ---
   showUi: showUiTool, // guide / notify / open_link
+
+  // --- front-end triggered action (registered safe button actions) ---
+  uiClick: uiClickTool, // trigger a registered page action by id (risk-gated)
+
+  // --- front-end form fill (registered input fields) ---
+  uiFill: uiFillTool, // write a value into a registered input/select/textarea by id
 
   // --- generic content/interaction rendering (multi-block) ---
   render: renderTool, // table / cards / chart / mermaid / document / choices / markdown / link / notify
@@ -72,6 +80,8 @@ export const presentationPrimitives: ToolDefinition[] = [
 ];
 
 export { interactionTools };
+export { uiInteractionTools };
+export { uiFillTools };
 export { renderTool } from "../render/tool.js";
 export * from "../render/index.js";
 

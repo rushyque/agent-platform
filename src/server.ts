@@ -325,6 +325,25 @@ const runtime = new CopilotRuntime({
       token: token || "",
       headers: Object.fromEntries(request.headers.entries()),
     });
+    // 平台通用注入：前端每轮把"当前页面可用动作清单（含风险标注）"经 x-ui-actions
+    // 请求头上报，挂到 context.uiActions，供 ui_click 工具校验与模型选动作。
+    // 这是平台级公共能力，任何接入项目的前端都可上报，不依赖具体项目实现。
+    const uiActionsHeader = request.headers.get("x-ui-actions");
+    if (uiActionsHeader) {
+      try {
+        const decoded = decodeURIComponent(uiActionsHeader);
+        const parsed = JSON.parse(decoded);
+        if (Array.isArray(parsed)) context.uiActions = parsed;
+      } catch {
+        logger.for("Run").warn("x-ui-actions header parse failed", {});
+      }
+    }
+    // 平台级对话模式注入：前端经 X-Chat-Mode 上报（browse/act/full），挂到 context.chatMode。
+    // 平台据此裁剪工具（browse 不暴露 ui_click）并让 ui_click 决定点击/确认/高亮行为，
+    // 任何接入项目的前端都可上报，是平台级公共能力。缺省回落到 "act"（行动模式）。
+    const chatModeHeader = request.headers.get("x-chat-mode");
+    const chatMode = chatModeHeader === "browse" || chatModeHeader === "full" ? chatModeHeader : "act";
+    context.chatMode = chatMode;
     // 平台 meta 注入：若 AgentConfig 提供 database（DatabaseBackend），挂到 context，
     // 供 list_tables / describe_table / sample_rows / run_sql 从 context.database 取用（免项目在 resolveContext 手动塞）。
     if (config.database) context.database = config.database;
@@ -398,6 +417,15 @@ const runtime = new CopilotRuntime({
             context,
             override: config.selectTools,
           });
+          // 平台级硬边界（任何接入项目都生效）：
+          //   1) 浏览模式：不暴露任何"前端动作触发/填表"工具（ui_click / ui_fill），模型只能返回结果/跳转；
+          //   2) 非完全模式：裁剪掉声明 fullModeOnly 的工具（高风险写操作只在完全模式下可用），
+          //      其他模式模型根本拿不到，无法误触发或绕过确认。
+          const actionFilteredTools = activeTools.filter(
+            (t) =>
+              !(chatMode === "browse" && (t.name === "ui_click" || t.name === "ui_fill")) &&
+              !(chatMode !== "full" && t.fullModeOnly)
+          );
           // 按意图解出采样温度：intentTemperature 优先 > temperature > 平台默认（createLLMClient 内部 0.2）。
           // 数据/查询类低温度保真；开放/创作类可提温释放表达。undefined 时走平台默认，不透传也安全。
           const effectiveTemperature =
@@ -406,7 +434,7 @@ const runtime = new CopilotRuntime({
           // 收集本 run 激活的只读工具名（按 ToolDefinition.readonly 声明），
           // 闭包传入 createLLMClient → 压缩中间件据此判定不折叠（命名关键词兜底）。
           const readonlyTools = new Set(
-            activeTools.filter((t) => t.readonly).map((t) => t.name)
+            actionFilteredTools.filter((t) => t.readonly).map((t) => t.name)
           );
 
           // 构建 system prompt（透传 intent，避免重复分类）+ 中台级上下文管理约定
@@ -430,7 +458,7 @@ const runtime = new CopilotRuntime({
           // 不再重跑后端（见 middleware/tool-dedup.ts）。
           const dedupCache = createToolDedupCache();
           const aiTools = {
-            ...toAISDKTools(activeTools, context, input.threadId, input.runId, agentId, dedupCache),
+            ...toAISDKTools(actionFilteredTools, context, input.threadId, input.runId, agentId, dedupCache),
             // 取回工具：当 compactor 把老 tool-result 折叠成 [已折叠 ... ref=art-xxx] 后，
             // 模型若需要其完整细节，主动调用本工具按 ref 拉取，而非被动背着完整结果。
             getArtifact: tool({
@@ -454,7 +482,7 @@ const runtime = new CopilotRuntime({
             // 这里不放行（避免前端无法消费 ui.render），而是把 blocks 转回内联文本并明确
             // 要求模型改以正文输出，从而让 render 通道的决定性自纠替代随机的"有时自纠、有时
             // 退化成纯文本"。项目已装配 render 工具时不会走到这里（下方按名称豁免）。
-            ...(activeTools.some((t) => t.name === "render")
+            ...(actionFilteredTools.some((t) => t.name === "render")
               ? {}
               : {
                   render: tool({
@@ -517,8 +545,8 @@ const runtime = new CopilotRuntime({
             agentId,
             route: "hermes",
             intent,
-            selectedTools: activeTools.map((t) => t.name),
-            totalTools: config.tools.length,
+            selectedTools: actionFilteredTools.map((t) => t.name),
+            totalTools: actionFilteredTools.length,
             role: context.role ?? "unknown",
             userId,
             model: config.model ?? settings.DEEPSEEK_MODEL,
@@ -532,8 +560,8 @@ const runtime = new CopilotRuntime({
             userId,
             route: "hermes",
             intent,
-            selectedTools: activeTools.map((t) => t.name),
-            totalTools: config.tools.length,
+            selectedTools: actionFilteredTools.map((t) => t.name),
+            totalTools: actionFilteredTools.length,
             role: context.role ?? "unknown",
             model: config.model ?? settings.DEEPSEEK_MODEL,
           });
@@ -546,8 +574,8 @@ const runtime = new CopilotRuntime({
             data: {
               intent,
               route: "hermes",
-              selectedTools: activeTools.map((t) => t.name),
-              totalTools: config.tools.length,
+              selectedTools: actionFilteredTools.map((t) => t.name),
+              totalTools: actionFilteredTools.length,
               role: context.role ?? "unknown",
               model: config.model ?? settings.DEEPSEEK_MODEL,
             },

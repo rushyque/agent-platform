@@ -16,7 +16,7 @@ const DEFAULT_API_BASE =
 export const saleshubAgentConfig: AgentConfig = {
   agentId: "saleshub",
   description:
-    "SalesHub 销售系统助手：查询订单（含收款计划/收款记录）与客户、客户订单，面向销售员/主管/管理员。",
+    "SalesHub 销售系统助手：查询定单记录（含收款计划）、已审核汇款到账与冲红/预付对账报表，面向销售员/主管/管理员。",
   resolveContext: async ({ userId, token }) => {
     // Token was already verified by the platform. Decode claims to get the
     // display name + role that SalesHub embedded at login (full_name / role).

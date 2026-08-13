@@ -21,6 +21,9 @@ export interface ToolDefinition {
   // 可选：声明只读工具。只读工具的结果不进入上下文折叠候选（始终完整保留），
   // 断"折叠→重查→再折叠"死循环。判定以本字段为准，命名关键词（view/list/detail）兜底。
   readonly?: boolean;
+  // 可选：声明"仅完全模式可用的写操作"。browse/act 模式下该工具一律不暴露给模型，
+  // 只有 full 完全模式才可调用 —— 平台级硬约束，任何接入项目都能用它来限定高风险写操作。
+  fullModeOnly?: boolean;
 }
 
 // AgentConfig —— 每个接入系统的配置契约

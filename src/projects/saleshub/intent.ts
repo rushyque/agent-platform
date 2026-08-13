@@ -2,7 +2,7 @@ import type { Message } from "@ag-ui/core";
 import type { AgentContext } from "../../types/agent-config.js";
 
 // SalesHub 意图分类 —— 只分两类，够用、可预测：
-//  - "query"   需要真实业务数据/事实，必须走工具（订单/客户/统计等），平台用低温保真。
+//  - "query"   需要真实业务数据/事实，必须走工具（定单记录/回款/冲红预付/统计等），平台用低温保真。
 //  - "general" 开放性问题（起草文案、解释、给建议、头脑风暴、闲聊、说明），
 //              不强制工具，平台按需提温释放表达。
 // 判定依据：最后一条用户消息出现"数据诉求"关键词 → query；否则 general。
