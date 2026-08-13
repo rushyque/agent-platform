@@ -93,7 +93,8 @@ export function buildSalesPrompt(context: SaleshubContext): string {
       "查定单记录用 `saleshub_list_order_records`（列表，支持关键字/年份/业务员/数据来源过滤）与 `saleshub_order_record_detail`（单条详情 + 收款计划）；" +
         "查冲红/预付用 `saleshub_recon_report`；查当前销售员全部汇款/收款记录（各状态）用 `saleshub_list_remittances`。\n" +
         "查拜访计划用 `saleshub_list_visit_plans`（返回 id 供后续引用），查邮件收件人候选用 `saleshub_visit_plan_recipients`（返回 id/姓名/邮箱）。\n" +
-        "金额以接口返回为准，币种见各工具的 `currency` 字段；定单记录里的金额见 `totalAmount`。"
+        "金额以接口返回为准，币种见各工具的 `currency` 字段；定单记录里的金额见 `totalAmount`。\n" +
+        "注意 `saleshub_list_order_records` 单页最多 100 条，返回 `total` 但不支持一次全量返回；面对宽泛的汇总诉求先按「大结果集与全量查询纪律」收窄口径，不要翻页硬拉全量。"
     ),
     section(
       "页面跳转",
@@ -124,6 +125,7 @@ export function buildSalesPrompt(context: SaleshubContext): string {
     toolProtocol({
       rules: [
         "定单记录用 `saleshub_list_order_records` 拉列表（支持过滤与分页，返回 total）或 `saleshub_order_record_detail` 查单条；需要收款计划时用详情。",
+        "**大结果集纪律**：`saleshub_list_order_records` 单页最多 100 条且不支持一次返回全量。当用户要\"按客户/按年/全部汇总\"、或你的一次分页 `count` 已到上限而 `total` 明显更多时，**绝不翻页硬拉全量累计**（否则会把上下文撑爆、陷入工具调用循环）。改为：先用一次分页拿 `total` 与采样，再用 `choices` 主动收窄口径（看统计/TopN/某客户/某时间段/某业务员），多用 `chart`/`cards` 可视化呈现，并在回复里**如实说明覆盖范围与已超出单页上限**。",
         "冲红/预付相关问题（有多少冲红单、预付转收款、某客户冲红）一律用 `saleshub_recon_report`，不要用其它工具拼凑。",
         "要发拜访计划邮件时：先用 `saleshub_list_visit_plans` 找到目标计划 id，再用 `saleshub_visit_plan_recipients` 找收件人 id，最后调用 `saleshub_send_visit_plan_email`。",
         "`saleshub_send_visit_plan_email` 是唯一写操作，仅完全模式可用；真实发送前建议先 dryRun=true 验证，再视用户确认决定是否真实发送。",
@@ -138,10 +140,21 @@ export function buildSalesPrompt(context: SaleshubContext): string {
     choicesProtocol(),
     terminationProtocol(),
     section(
+      "大结果集与全量查询纪律",
+      "用户常提\"所有/全部/整年/每个客户\"这类宽泛诉求，对应的底层结果可能远超单页上限（定单记录单页最多 100 条）。" +
+        "应对原则是**先收窄、再取数**，而不是硬拉全量：\n" +
+        "1. 先用一次分页查接口，拿到 `total` 与当前 `count`；若 `count` 已到上限（100）而 `total` 明显更大，即可判定为\"大结果集\"——不要在用户没有明确坚持要看全量明细时继续翻页。\n" +
+        "2. 用 `<render>` choices 主动问用户要哪个口径，选项尽量是可执行的收窄方向（如\"按客户 Top 10\"\"只看某客户\"\"按月份拆分\"\"只看某时间段/某业务员\"），并标注 recommended。\n" +
+        "3. 优先用可视化交付体验：总览用 cards，对比/趋势用 chart（bar/line/area/pie），明细少时用 table；明确无法精确汇总全量时，如实说明\"该口径需覆盖 N 笔、超过单页上限，建议按 XX 收窄\"。\n" +
+        "4. 绝对禁止：为了\"凑齐全量\"连续多次翻页调用同一查询工具；这会放大 token、拖垮响应甚至死循环。宁可给一次有效的收窄后结果，也不要给一堆半截的分页残片。"
+    ),
+    section(
       "销售场景选项示例",
       "按真实数据填充 label/value：\n" +
         "- 查完汇总后（结果块之后紧跟建议方向）：「按业务员拆分」「看回款情况」「导出明细」，options 用 on_type，prompt 用「接下来想怎么看？」的继续口吻 → \n" +
         "  <render>[{\"kind\":\"choices\",\"header\":\"下一步\",\"dismissPolicy\":\"on_type\",\"prompt\":\"接下来想怎么看？\",\"choices\":[{\"label\":\"按业务员拆分\",\"value\":\"按业务员拆分\",\"recommended\":true,\"description\":\"看每个业务员的表现\"},{\"label\":\"看回款情况\",\"value\":\"看回款情况\",\"description\":\"聚焦已收/未收\"}]}]</render>\n" +
+        "- 面对\"全部/整年/每个客户\"这类可能超单页上限的宽泛诉求，先收窄口径（options 用 on_type）：\n" +
+        "  <render>[{\"kind\":\"choices\",\"header\":\"范围太大，先收窄\",\"dismissPolicy\":\"on_type\",\"prompt\":\"今年定单较多，想按哪个口径看？\",\"choices\":[{\"label\":\"客户 Top 10\",\"value\":\"客户Top10\",\"description\":\"按订单额最高的前 10 家客户\",\"recommended\":true},{\"label\":\"指定客户\",\"value\":\"指定客户\",\"description\":\"只看某一家客户的定单\"},{\"label\":\"按月份拆分\",\"value\":\"按月份拆分\",\"description\":\"看各月订单分布与趋势\"}]}]</render>\n" +
         "- 歧义时：「按工单日期」「按状态变更日期」\n" +
         "- 歧义澄清场景的 choices 块应带 dismissPolicy: \"on_select\"。\n" +
         "- 建议回复场景的 choices 块应带 dismissPolicy: \"on_type\"。"

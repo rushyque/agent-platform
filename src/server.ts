@@ -33,6 +33,8 @@ import {
 } from "./observe/index.js";
 import { DAGAgent } from "./core/dag/dag-agent.js";
 import { DatabaseAgentRunner } from "./persistence/database-runner.js";
+import { archiveRun } from "./projects/saleshub/archive.js";
+import type { SalesContext } from "./projects/saleshub/tools/helpers.js";
 import { ensureSchema } from "./persistence/db.js";
 import { startCleanup } from "./persistence/cleanup.js";
 import { settings } from "./config/settings.js";
@@ -528,6 +530,25 @@ const runtime = new CopilotRuntime({
             messages: runMessages,
             model: config.model ?? settings.DEEPSEEK_MODEL,
             intent,
+            ...(agentId === "saleshub"
+              ? {
+                  onRunComplete: async (steps: any[], msgs?: any[]) => {
+                    try {
+                      await archiveRun(
+                        context as SalesContext,
+                        input.threadId,
+                        input.runId,
+                        steps,
+                        msgs,
+                      );
+                    } catch (err) {
+                      logger.for("archive").error("archive hook failed", {
+                        err: err instanceof Error ? err.message : String(err),
+                      });
+                    }
+                  },
+                }
+              : {}),
           });
 
           logger.for("Factory").debug("hermes run", {

@@ -20,6 +20,8 @@ export interface RunHooksParams {
   messages?: any[];
   model?: string | null;
   intent?: string | null;
+  /** 可选：run 完成后回调（steps/messages），供项目侧整轮问答 + 工具轨迹落库（如 saleshub 历史归档） */
+  onRunComplete?: (steps: any[], messages?: any[]) => void;
 }
 
 // 从 steps + user 消息构造本次对话的可摘要文本
@@ -43,7 +45,7 @@ function buildRunText(steps: any[], messages?: any[]): string {
 }
 
 export function createRunHooks(params: RunHooksParams) {
-  const { agentId, userId, threadId, runId, messages, model, intent } = params;
+  const { agentId, userId, threadId, runId, messages, model, intent, onRunComplete } = params;
   const startedAt = Date.now();
   let stepIndex = -1;
 
@@ -162,6 +164,15 @@ export function createRunHooks(params: RunHooksParams) {
         });
       } catch (err) {
         logger.for("Audit").error("recordRun failed", { err: (err as Error).message });
+      }
+
+      // 项目侧整轮归档（如 saleshub 对话历史落库）：fire-and-forget，不影响 run 收尾。
+      if (onRunComplete) {
+        try {
+          onRunComplete(Array.isArray(steps) ? steps : [], messages);
+        } catch (err) {
+          logger.for("Audit").error("onRunComplete failed", { err: (err as Error).message });
+        }
       }
     },
   };
