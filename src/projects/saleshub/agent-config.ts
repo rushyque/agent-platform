@@ -53,5 +53,14 @@ export const saleshubAgentConfig: AgentConfig = {
     query: 0.2,
     general: 0.7,
   },
+  // 多步表单/页面动作编排时，模型会在一轮里多次调用只读的 get_page_state 去确认
+  // "当前在哪一页、哪些动作可用"——这是正常且必要的自查，不属于"卡住重复"。
+  // 因此把它从重复工具判定里排除（ignoreTools），只对真正的重复 UI 变更/填表兜底。
+  // 同时把重复阈值放宽到 5，给多步编排更多余量，避免因"同一动作被至少重复 3 次"
+  // 而误判卡住提前截断正常流程。
+  loopGuard: {
+    ignoreTools: ["get_page_state"],
+    maxRepeatedToolCall: 5,
+  },
   buildSystemPrompt: ({ context }) => buildSalesPrompt(context as SaleshubContext),
 };

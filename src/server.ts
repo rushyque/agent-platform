@@ -191,11 +191,31 @@ function toAISDKTools(
               // （见 core/ui-actions 与 ui-click/ui-fill 的通用顺序约束）。同一对象引用
               // 让后续工具 execute 能读到本轮已做过的动作，从而拒绝跳步。
               if (result && (result as any).ok === true && (result as any).ui?.id) {
-                const done: string[] = (context as any).executedUiActions ?? [];
-                if (!Array.isArray(done)) (context as any).executedUiActions = [];
-                if (!(context as any).executedUiActions.includes((result as any).ui.id)) {
-                  (context as any).executedUiActions.push((result as any).ui.id);
+                let done: string[] = (context as any).executedUiActions ?? [];
+                if (!Array.isArray(done)) {
+                  done = [];
+                  (context as any).executedUiActions = done;
                 }
+                if (!done.includes((result as any).ui.id)) {
+                  done.push((result as any).ui.id);
+                }
+              }
+              // 通用"当前页"跟踪：凡是返回了页面级 UI 指令的动作（ui_click/ui_fill 带 page，
+              // navigate_to/show_ui 的 open_link 带内部路由），就把 context.currentPage 更新到
+              // 对应页面，供 get_page_state 在模型动手前读取"现在在哪一页"。同一 run 内共享
+              // context 引用，因此后续 get_page_state 能读到最新页。平台级、与业务无关。
+              const ui = (result as any)?.ui as
+                | { type?: string; page?: string; url?: string; mode?: string }
+                | undefined;
+              if (result && (result as any).ok === true && ui) {
+                let nextPage: string | undefined;
+                if (ui.page) {
+                  nextPage = ui.page;
+                } else if (ui.type === "open_link" && typeof ui.url === "string") {
+                  const u = ui.url.split("?")[0];
+                  if (u.startsWith("/")) nextPage = u;
+                }
+                if (nextPage) (context as any).currentPage = nextPage;
               }
               // 工具结果分级：结果在预算内直接完整内联回上下文（模型拿到全量即可作答，
               // 不必重查/取回，治绕圈）；超过预算才外置为 {ref, summary, full:false} 安全阀。
@@ -338,19 +358,6 @@ const runtime = new CopilotRuntime({
       token: token || "",
       headers: Object.fromEntries(request.headers.entries()),
     });
-    // 平台通用注入：前端每轮把"当前页面可用动作清单（含风险标注）"经 x-ui-actions
-    // 请求头上报，挂到 context.uiActions，供 ui_click 工具校验与模型选动作。
-    // 这是平台级公共能力，任何接入项目的前端都可上报，不依赖具体项目实现。
-    const uiActionsHeader = request.headers.get("x-ui-actions");
-    if (uiActionsHeader) {
-      try {
-        const decoded = decodeURIComponent(uiActionsHeader);
-        const parsed = JSON.parse(decoded);
-        if (Array.isArray(parsed)) context.uiActions = parsed;
-      } catch {
-        logger.for("Run").warn("x-ui-actions header parse failed", {});
-      }
-    }
     // 平台级对话模式注入：前端经 X-Chat-Mode 上报（browse/act/full），挂到 context.chatMode。
     // 平台据此裁剪工具（browse 不暴露 ui_click）并让 ui_click 决定点击/确认/高亮行为，
     // 任何接入项目的前端都可上报，是平台级公共能力。缺省回落到 "act"（行动模式）。
@@ -408,6 +415,29 @@ const runtime = new CopilotRuntime({
           return runWithCtx(
             { runId: input.runId, threadId: input.threadId, agentId, userId, traceId, route: "hermes" },
             () => {
+          // 平台通用注入：前端把"可用动作清单（含风险标注）"随请求体上报（清单较大，
+          // 放 URL 编码请求头在动作多时容易超服务器头大小限制触发 431）。此处从已解析的
+          // run body（input.forwardedProps.uiActions，CopilotKit 透传通道，自定义顶层字段
+          // 会被 runtime 剥离）读取并挂到 context.uiActions，供 ui_click / ui_fill 工具校验
+          // 与模型选动作。这是平台级公共能力，任何接入项目的前端都可上报。
+          // 全量清单带 page 标注，配合"先 navigate_to 到动作的 page 再操作"的通用纪律，
+          // 模型在同一 run 内导航后仍拿得到目标页动作，多步编排不因页切换而丢清单。
+          const fwdUiActions = (input as any)?.forwardedProps?.uiActions;
+          if (Array.isArray(fwdUiActions)) {
+            (context as any).uiActions = fwdUiActions;
+            logger.for("Factory").info("uiActions injected from forwardedProps", { count: fwdUiActions.length });
+          } else {
+            logger.for("Factory").info("uiActions NOT present in forwardedProps", {});
+          }
+          // 前端上报用户当前实际所在的浏览器路由：get_page_state 在 run 初始据此知道
+          // "现在在哪一页"。仅当本轮尚未跟踪到页面时作为起点（后续 navigate/ui 会覆盖）。
+          const fwdCurrentPage = (input as any)?.forwardedProps?.currentPage;
+          if (typeof fwdCurrentPage === "string" && fwdCurrentPage) {
+            if (!(context as any).currentPage) {
+              (context as any).currentPage = fwdCurrentPage;
+            }
+            logger.for("Factory").info("currentPage seeded from forwardedProps", { page: fwdCurrentPage });
+          }
           // 用户选择交接：若最近一条用户消息是 `<CHOICE_SELECT .../>` 选择标记，
           // 归一化为类型化文本，让模型明确知道用户选了哪个选项（不是靠文本回显猜）。
           // normalizedMessages 同时用于意图分类 / prompt / hooks / 消息转换，保持单一口径。

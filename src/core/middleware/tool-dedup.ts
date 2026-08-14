@@ -35,7 +35,21 @@ export function schemaKeys(schema: unknown): string[] {
 }
 
 /** 这些元工具调用频率高但代价极低或语义非幂等，不参与去重。 */
-const DEDUP_IGNORE = new Set(["now", "recall", "getNote", "setNote", "confirm", "getArtifact"]);
+const DEDUP_IGNORE = new Set([
+  "now",
+  "recall",
+  "getNote",
+  "setNote",
+  "confirm",
+  "getArtifact",
+  // UI 交互/状态工具：每次调用都应让前端真正执行一遍并回传最新 DOM 状态，
+  // 不是幂等查询。去重回放会给模型过时的页面/动作结果，导致它误以为没进入、
+  // 反复重触发入口而绕圈。因此一律不参与去重，始终实时执行。
+  "navigate_to",
+  "ui_click",
+  "ui_fill",
+  "get_page_state",
+]);
 
 export interface DedupCacheEntry {
   result: unknown;

@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
 import type { UIActionRegistryEntry } from "../ui-actions/types.js";
+import {
+  computeEffectiveDone,
+  isEntrySatisfied,
+  normalizePage,
+} from "../ui-actions/effective.js";
 
 // 平台级"前端动作触发"工具（ui_click）。
 //
@@ -39,10 +44,10 @@ function riskText(risk: string): string {
 /** 通用前置校验：动作声明了 after（需先做的前置动作 id）时，检查本轮是否已执行过全部前置。 */
 function afterViolation(
   entry: UIActionRegistryEntry,
-  done: Set<string>
+  effectiveDone: Set<string>
 ): string | null {
   if (!entry.after || entry.after.length === 0) return null;
-  const missing = entry.after.filter((id) => !done.has(id));
+  const missing = entry.after.filter((id) => !effectiveDone.has(id));
   if (missing.length === 0) return null;
   return (
     `Action "${entry.label}" 有前置依赖，需先依次完成：【${missing.join("、")}】` +
@@ -85,9 +90,14 @@ export const uiClickTool: ToolDefinition = {
         hint: `Action "${entry.label}" is an input field (kind=${entry.kind}); use ui_fill to set its value instead of ui_click.`,
       };
     }
-    // 通用顺序前置校验（基于协议字段 after，与业务无关）。
-    const done = new Set<string>((context as any).executedUiActions ?? []);
-    const violated = afterViolation(entry, done);
+    // 通用顺序前置校验（基于协议字段 after，与业务无关）。用"生效前置集合"
+    // （含已在目标页天然满足的入口动作）判定，与 ui_fill / get_page_state 口径一致。
+    const effectiveDone = computeEffectiveDone(
+      actions,
+      (context as any).executedUiActions ?? [],
+      (context as any).currentPage
+    );
+    const violated = afterViolation(entry, effectiveDone);
     if (violated) {
       return {
         ok: false,
@@ -98,6 +108,19 @@ export const uiClickTool: ToolDefinition = {
     // 模型传的 risk 若与清单不符，以清单为准（前端硬闸门仍会再兜底一次）。
     const risk = entry.risk;
     const mode = modeCopy((context as any).chatMode);
+    const currentPage = (context as any).currentPage as string | undefined;
+
+    // 通用防回跳：入口动作的目标页已到达时，再点入口只会切走已填好/已进入的页。
+    // 直接拒绝并给出明确指引，避免模型"以为没进入、回列表页重触发入口"的绕圈。
+    if (entry.entry && isEntrySatisfied(entry, currentPage || "")) {
+      return {
+        ok: false,
+        ui: { type: "click", id, valid: false },
+        hint:
+          `Action "${entry.label}" 是入口动作，而当前已在它的目标页 ${normalizePage(currentPage || "")}，` +
+          "入口已满足：不必再点击该入口，也不要导航回列表页重触发。请直接继续填写/提交当前页的动作。",
+      };
+    }
 
     // 行动模式：mutating / critical 不直接执行，转为"命令通过"确认指令，由前端渲染卡片。
     if (mode === "act" && risk !== "none") {
@@ -134,9 +157,12 @@ export const uiClickTool: ToolDefinition = {
       };
     }
 
+    // 页面跟踪：入口/跳转类动作返回其目标页（entry.to 优先），否则用登记页本身，
+    // 供 server.ts 更新 context.currentPage，让 get_page_state 读到"执行后落在哪一页"。
+    const pageAfter = entry.entry && entry.to ? entry.to : entry.page;
     return {
       ok: true,
-      ui: { type: "click", id: entry.id, label: entry.label, page: entry.page, risk },
+      ui: { type: "click", id: entry.id, label: entry.label, page: pageAfter, risk },
       hint: `Click "${entry.label}" (${riskText(risk)})`,
     };
   },

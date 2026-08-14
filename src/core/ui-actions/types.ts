@@ -19,4 +19,5 @@ export interface UIActionRegistryEntry {
   after?: string[]; // 执行前必须先做的前置动作 id（通用顺序约束）
   options?: Array<{ value: string; label?: string }>; // select/枚举输入可用的合法取值
   entry?: boolean; // 是否进入下一个子页面的入口动作
+  to?: string; // 入口动作(entry)的目标子页面路由；执行后会跳到该页，供中台正确跟踪当前页
 }

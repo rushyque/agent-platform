@@ -11,6 +11,7 @@ import {
   runSqlTool,
 } from "../data/tools.js";
 import { observeStateTool } from "./observe-state.js";
+import { getPageStateTool } from "./page-state.js";
 import { recallTool } from "./recall.js";
 import { setNoteTool, getNoteTool } from "./notes.js";
 import { nowTool } from "./now.js";
@@ -29,6 +30,7 @@ export const coreTools = {
 
   // --- state observation ---
   observeState: observeStateTool, // runtime snapshot (needs context.getState)
+  getPageState: getPageStateTool, // read current page + available actions before acting
 
   // --- memory ---
   recall: recallTool, // review recent tool results
@@ -82,6 +84,7 @@ export const presentationPrimitives: ToolDefinition[] = [
 export { interactionTools };
 export { uiInteractionTools };
 export { uiFillTools };
+export { getPageStateTool };
 export { renderTool } from "../render/tool.js";
 export * from "../render/index.js";
 

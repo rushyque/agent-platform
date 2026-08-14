@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
 import type { UIActionRegistryEntry } from "../ui-actions/types.js";
+import { computeEffectiveDone } from "../ui-actions/effective.js";
 
 // 平台级"前端填表"工具（ui_fill）。
 //
@@ -61,7 +62,13 @@ export const uiFillTool: ToolDefinition = {
       };
     }
     // 通用顺序前置校验（基于协议字段 after，与业务无关）：如填表项要求先进入对应页面。
-    const done = new Set<string>((context as any).executedUiActions ?? []);
+    // 用"生效前置集合"（含已在目标页天然满足的入口动作）判定，与 get_page_state 的口径一致，
+    // 避免"入口已满足却被判为未登记"的自相矛盾导致模型绕圈重进。
+    const done = computeEffectiveDone(
+      actions,
+      (context as any).executedUiActions ?? [],
+      (context as any).currentPage
+    );
     if (entry.after && entry.after.length > 0) {
       const missing = entry.after.filter((id) => !done.has(id));
       if (missing.length > 0) {
