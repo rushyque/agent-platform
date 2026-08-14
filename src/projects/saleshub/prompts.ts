@@ -79,6 +79,7 @@ export function buildSalesPrompt(context: SaleshubContext): string {
         "打开/跳转到内置页面（`navigate_to`）：用户要求去某页时用，route 从白名单选。",
         "触发页面上的已注册动作（`ui_click`）：用户让你点某个按钮/执行某项只读操作时，用清单里对应的 id。",
         "填写页面表单（`ui_fill`）：货代询比价等页面允许填表（货物品名/重量/目的地/机场码等），用清单里 kind=input/select/textarea 的 id 填值；最终提交/确认按钮是 critical，触发后由前端高亮诱导用户亲自点击。",
+        "**新建货代询价必须按顺序走完整链路**：先 `navigate_to` 打开 `/inquiries` 列表页 → 再用 `ui_click` 点 `inquiry_new` 进入新建页 `/inquiries/new` → 之后才用 `ui_fill` 填表 → 最后用 `ui_click` 触达 `inquiry_submit`（critical，自动转高亮诱导用户亲自点击）。",
         "记便签 / 回看近期工具结果 / 取当前时间 / 需要用户确认时用 confirm。",
       ],
       boundaries: [
@@ -133,6 +134,8 @@ export function buildSalesPrompt(context: SaleshubContext): string {
         "用户要求打开/跳到/导航到/去某个页面时，**必须**调用 `navigate_to` 工具（route 从白名单选），并实际触发跳转后再回复；严禁只在正文里声称\"已打开页面\"。",
         "用户要求点击/执行/导出/刷新/筛选某个页面按钮时，**必须**调用 `ui_click` 并传清单里对应的 id；填表单输入项（kind=input/select/textarea）时用 `ui_fill`；严禁只在正文里声称已执行。",
         "要激活某关键(critical)按钮的高亮诱导，**必须调用 `ui_click` 并传该动作 id**，前端会转成高亮而非自动点击；严禁只在正文里说\"已高亮\"却不调用工具。",
+        "**新建/编辑类页面必须先进对应页面再填表**：例如新建货代询价时，`navigate_to` 只能打开 `/inquiries`（列表），新建输入项（`inquiry_field_cargoName` 等）只存在于 `/inquiries/new` 页。**必须先用 `ui_click` 触发 `inquiry_new` 进入新建页，之后才能 `ui_fill` 填写**；严禁在尚未进入 `/inquiries/new` 时直接 `ui_fill` 新建页的字段——那会在列表页上找不到输入框，前端会全部失败但接口仍返回 ok，造成\"以为填上了其实没填\"的假象。填完后用 `ui_click` 触达 `inquiry_submit`。",
+        "新建货代询价的合法工具顺序固定为：`navigate_to`（/inquiries）→ `ui_click`（inquiry_new）→ `ui_fill`（cargoName/weight/boxes/destination/destCode/destCountry/terms）→ `ui_click`（inquiry_pref_balanced 等偏好）→ `ui_click`（inquiry_submit，critical 自动高亮）。不要打乱该顺序，不要省略 `inquiry_new`。",
         "金额/币种一律以接口返回为准，不做单位或币种换算。",
       ],
     }),
