@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
+import type { UIActionRegistryEntry } from "../ui-actions/types.js";
 
 // 平台级"前端填表"工具（ui_fill）。
 //
@@ -12,13 +13,7 @@ import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
 // 安全模型：填表本身不产生后端副作用，risk 必须为 none 才能被本工具使用；
 // 关键/有副作用的项一律拒绝由 ui_fill 处理（应走 ui_click 的确认/高亮闸门）。
 
-export interface UIActionRegistryEntry {
-  id: string;
-  label: string;
-  page: string;
-  risk: "none" | "mutating" | "critical";
-  kind: "button" | "input" | "select" | "textarea";
-}
+export type { UIActionRegistryEntry } from "../ui-actions/types.js";
 
 const KIND = z.enum(["input", "select", "textarea"]);
 
@@ -64,6 +59,20 @@ export const uiFillTool: ToolDefinition = {
         ui: { type: "fill", id, valid: false },
         hint: `Field "${entry.label}" has risk=${entry.risk} and must not be filled via ui_fill; route side-effecting actions through ui_click confirm/highlight gates.`,
       };
+    }
+    // 通用顺序前置校验（基于协议字段 after，与业务无关）：如填表项要求先进入对应页面。
+    const done = new Set<string>((context as any).executedUiActions ?? []);
+    if (entry.after && entry.after.length > 0) {
+      const missing = entry.after.filter((id) => !done.has(id));
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          ui: { type: "fill", id, valid: false },
+          hint:
+            `Field "${entry.label}" 有前置依赖，需先依次完成：【${missing.join("、")}】` +
+            `。请先用 ui_click 触发这些前置动作（如进入对应页面）再填写本字段，不要跳步。`,
+        };
+      }
     }
     return {
       ok: true,

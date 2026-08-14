@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
+import type { UIActionRegistryEntry } from "../ui-actions/types.js";
 
 // 平台级"前端动作触发"工具（ui_click）。
 //
@@ -20,13 +21,7 @@ import type { ToolDefinition, AgentContext } from "../../types/agent-config.js";
 //   - full   完全模式：只读 + mutating 直接执行，critical 不触发事件，改为高亮推荐操作诱导用户。
 // 模型看到的是"标注了风险的动作清单"，它选择 id，是否放行由前端硬闸门兜底。
 
-export interface UIActionRegistryEntry {
-  id: string;
-  label: string;
-  page: string; // route path 所在的页面，如 /visit-plans
-  risk: "none" | "mutating" | "critical";
-  kind?: "button" | "input" | "select" | "textarea"; // 缺省视为 button
-}
+export type { UIActionRegistryEntry } from "../ui-actions/types.js";
 
 const RISK = z.enum(["none", "mutating", "critical"]);
 const MODE = z.enum(["browse", "act", "full"]).optional();
@@ -39,6 +34,20 @@ function riskText(risk: string): string {
   if (risk === "critical") return "关键操作(critical, 前端高亮诱导用户点击, 不自动触发)";
   if (risk === "mutating") return "有副作用(mutating, 行动模式需用户通过)";
   return "只读(none)";
+}
+
+/** 通用前置校验：动作声明了 after（需先做的前置动作 id）时，检查本轮是否已执行过全部前置。 */
+function afterViolation(
+  entry: UIActionRegistryEntry,
+  done: Set<string>
+): string | null {
+  if (!entry.after || entry.after.length === 0) return null;
+  const missing = entry.after.filter((id) => !done.has(id));
+  if (missing.length === 0) return null;
+  return (
+    `Action "${entry.label}" 有前置依赖，需先依次完成：【${missing.join("、")}】` +
+    `。请先用 ui_click/ui_fill 触发这些前置动作再执行本动作，不要跳步。`
+  );
 }
 
 export const uiClickTool: ToolDefinition = {
@@ -74,6 +83,16 @@ export const uiClickTool: ToolDefinition = {
         ok: false,
         ui: { type: "click", id, valid: false },
         hint: `Action "${entry.label}" is an input field (kind=${entry.kind}); use ui_fill to set its value instead of ui_click.`,
+      };
+    }
+    // 通用顺序前置校验（基于协议字段 after，与业务无关）。
+    const done = new Set<string>((context as any).executedUiActions ?? []);
+    const violated = afterViolation(entry, done);
+    if (violated) {
+      return {
+        ok: false,
+        ui: { type: "click", id, valid: false },
+        hint: violated,
       };
     }
     // 模型传的 risk 若与清单不符，以清单为准（前端硬闸门仍会再兜底一次）。

@@ -186,6 +186,17 @@ function toAISDKTools(
                 return JSON.stringify({ ok: false, error: true, message: `工具执行异常: ${msg}` });
               }
               const execMs = Date.now() - t0;
+              // 通用"已执行动作"记录：ui_click / ui_fill 返回 ok:true 时，把动作 id 记入
+              // context.executedUiActions，供本轮后续动作的 after 前置校验使用
+              // （见 core/ui-actions 与 ui-click/ui-fill 的通用顺序约束）。同一对象引用
+              // 让后续工具 execute 能读到本轮已做过的动作，从而拒绝跳步。
+              if (result && (result as any).ok === true && (result as any).ui?.id) {
+                const done: string[] = (context as any).executedUiActions ?? [];
+                if (!Array.isArray(done)) (context as any).executedUiActions = [];
+                if (!(context as any).executedUiActions.includes((result as any).ui.id)) {
+                  (context as any).executedUiActions.push((result as any).ui.id);
+                }
+              }
               // 工具结果分级：结果在预算内直接完整内联回上下文（模型拿到全量即可作答，
               // 不必重查/取回，治绕圈）；超过预算才外置为 {ref, summary, full:false} 安全阀。
               // 编排层（领域工具行数/列投影 + run_sql TOP 上限）已保证典型结果尺度小，
