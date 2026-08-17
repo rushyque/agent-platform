@@ -430,13 +430,17 @@ const runtime = new CopilotRuntime({
             logger.for("Factory").info("uiActions NOT present in forwardedProps", {});
           }
           // 前端上报用户当前实际所在的浏览器路由：get_page_state 在 run 初始据此知道
-          // "现在在哪一页"。仅当本轮尚未跟踪到页面时作为起点（后续 navigate/ui 会覆盖）。
+          // "现在在哪一页"。浏览器真实位置是权威来源，故每轮都以它覆盖旧跟踪值
+          // （用户可能手动切页，或上一轮 navigate/UI 之后页面已变），避免用陈旧页
+          // 指导本轮动作；本轮内 navigate_to / ui_click 的页面级结果仍会继续覆盖它。
           const fwdCurrentPage = (input as any)?.forwardedProps?.currentPage;
           if (typeof fwdCurrentPage === "string" && fwdCurrentPage) {
-            if (!(context as any).currentPage) {
-              (context as any).currentPage = fwdCurrentPage;
-            }
-            logger.for("Factory").info("currentPage seeded from forwardedProps", { page: fwdCurrentPage });
+            const prev = (context as any).currentPage;
+            (context as any).currentPage = fwdCurrentPage;
+            logger.for("Factory").info("currentPage seeded from forwardedProps", {
+              page: fwdCurrentPage,
+              changed: prev !== fwdCurrentPage,
+            });
           }
           // 用户选择交接：若最近一条用户消息是 `<CHOICE_SELECT .../>` 选择标记，
           // 归一化为类型化文本，让模型明确知道用户选了哪个选项（不是靠文本回显猜）。
