@@ -20,6 +20,18 @@ function getRawModel(): any {
 
 const generatedTitles = new Set<string>();
 const MAX_TITLE_LEN = 20;
+// 太小/无意义（单个字符、纯标点、纯数字或异常符号）的模型输出不可用作标题，回退到截断。
+const MIN_TITLE_LEN = 2;
+const INVALID_TITLE_RE = /^[\s"'""「」【】()（）.,，。:：;；!！?？·\-_一\d]+$/;
+
+function isUsableTitle(title: string): boolean {
+  const t = title.trim();
+  if (t.length < MIN_TITLE_LEN) return false;
+  if (INVALID_TITLE_RE.test(t)) return false;
+  // 去掉常见首尾噪音后再看是否仍为空/过短，防"本"这类单字或剥离后只剩标点的情况
+  const cleaned = t.replace(/^[\s"'""「」【】()（）.,，。:：;；!！?？·\-_]+/, "").replace(/[\s"'""「」【】()（）.,，。:：;；!！?？·\-_]+$/, "");
+  return cleaned.length >= MIN_TITLE_LEN;
+}
 
 function truncateTitle(userMessage: string, assistantReply: string): string {
   const source = (userMessage || assistantReply || "").replace(/\s+/g, " ").trim();
@@ -59,7 +71,11 @@ export async function maybeGenerateTitle(
       title,
       ms: Date.now() - t0,
     });
-    return title || truncateTitle(userMessage, assistantReply);
+    if (!isUsableTitle(title)) {
+      logger.for("title").warn("generated title unusable, fallback", { threadId, title });
+      return truncateTitle(userMessage, assistantReply);
+    }
+    return title;
   } catch (err) {
     logger.for("title").warn("fallback to truncation", {
       threadId,
