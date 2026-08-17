@@ -123,7 +123,7 @@ function toAISDKTools(
   threadId: string,
   runId: string,
   agentId: string,
-  dedupCache?: Map<string, { result: unknown; inline: boolean }>
+  dedupCache?: Map<string, { result: unknown; inline: boolean; ref?: string | null }>
 ): Record<string, any> {
   return Object.fromEntries(
     configTools.map((t) => [
@@ -248,8 +248,16 @@ function toAISDKTools(
                 runId, threadId, agentId, toolName: t.name, execMs,
                 summary: staged.summary, ref: staged.ref, inline: staged.inline,
               });
-              if (dedupCache && t.readonly && staged.inline) {
-                dedupCache.set(toolSignature(t.name, args), { result, inline: true });
+              if (dedupCache && t.readonly) {
+                // 内联与外置同等登记：外置（inline:false）也记录 ref，同签名重查时
+                // 回放 ref+summary 并引导 getArtifact 取回，断"外置→看不到→重查"循环。
+                dedupCache.set(toolSignature(t.name, args), {
+                  result: staged.inline
+                    ? result
+                    : { ref: staged.ref, summary: staged.summary },
+                  inline: staged.inline,
+                  ref: staged.ref,
+                });
               }
               // 内联 → 回完整 result；外置 → 只回 ref + summary，并显式 full:false，
               // 让模型清楚"手上只有摘要、可按需取回"，消除"分不清是否已有数据"的重查歧义。

@@ -23,12 +23,33 @@ export async function compactPrompt(
     return policy.readOnlyToolKeywords.some((k) => name.includes(k));
   };
 
+  // 外置信封（execute 已外置为 {ref, toolName, summary, full:false}）同样不折叠：
+  // 其 output 本来就只是 locator+摘要，再折叠会把唯一可续取的 ref 摘掉，模型
+  // "看不到结果又取不回"必然重查。外置与内联同等受防循环保护（见智能查询分层规划阶段3）。
+  const isExternalized = (part: any) => {
+    const out = part?.output;
+    if (typeof out !== "string") return false;
+    if (!out.includes('"ref"')) return false;
+    try {
+      const parsed = JSON.parse(out);
+      return (
+        parsed &&
+        typeof parsed === "object" &&
+        typeof parsed.ref === "string" &&
+        parsed.ref.startsWith("art-") &&
+        parsed.full === false
+      );
+    } catch {
+      return false;
+    }
+  };
+
   // 收集【可折叠】tool-result part 的位置 (entryIdx, partIdx) —— 排除只读工具
   const trLocs: Array<{ ei: number; pi: number }> = [];
   prompt.forEach((e: any, ei: number) => {
     const parts = Array.isArray(e?.content) ? e.content : [];
     parts.forEach((p: any, pi: number) => {
-      if (p?.type === "tool-result" && !isReadOnly(p)) trLocs.push({ ei, pi });
+      if (p?.type === "tool-result" && !isReadOnly(p) && !isExternalized(p)) trLocs.push({ ei, pi });
     });
   });
 

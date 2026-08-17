@@ -43,7 +43,21 @@ describe("tool dedup", () => {
     expect(hit!.replay).toContain('{"total":114}');
   });
 
-  it("上次结果外置（未内联）时不命中回放，避免用摘要冒充全量", () => {
+  it("上次结果外置（带 ref）也命中：回放 ref+summary 并引导 getArtifact 取回，而非重查", () => {
+    const cache = createToolDedupCache();
+    cache.set(toolSignature("saleshub_list_orders", {}), {
+      result: { ref: "art-abc", summary: "共344笔" },
+      inline: false,
+      ref: "art-abc",
+    });
+    const hit = replayDedup(cache, "saleshub_list_orders", {}, []);
+    expect(hit).not.toBeNull();
+    expect(hit!.replay).toContain("art-abc");
+    expect(hit!.replay).toContain("getArtifact");
+    expect(hit!.replay).toContain("不要重新调用");
+  });
+
+  it("上次结果外置但缺 ref（异常态）不命中，正常执行", () => {
     const cache = createToolDedupCache();
     cache.set(toolSignature("saleshub_list_orders", {}), { result: { ref: "x" }, inline: false });
     const hit = replayDedup(cache, "saleshub_list_orders", {}, []);

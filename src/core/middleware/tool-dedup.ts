@@ -54,6 +54,8 @@ const DEDUP_IGNORE = new Set([
 export interface DedupCacheEntry {
   result: unknown;
   inline: boolean;
+  /** 外置结果：ref 可取回完整数据（inline=false 时有效） */
+  ref?: string | null;
 }
 
 /** 每次 run 一个去重缓存。 */
@@ -62,8 +64,13 @@ export function createToolDedupCache(): Map<string, DedupCacheEntry> {
 }
 
 /**
- * 命中判定：同名工具 + 相同参数签名 + 上次结果已完整内联，且该工具允许去重。
- * 命中时返回回放内容（含信任提示），否则返回 null（正常执行）。
+ * 命中判定：同名工具 + 相同参数签名 + 上次结果可复用（内联或外置均可），且该工具允许去重。
+ *
+ * 两种命中形态：
+ *  - 内联（inline:true）：回放完整结果，模型直接基于已有数据作答；
+ *  - 外置（inline:false + ref）：回放 ref + summary + 终止指令——外置结果取回同一 ref
+ *    不算新查询，引导模型 getArtifact 取回而非重跑后端。这是防"外置→看不到→重查"
+ *    循环的关键：外置与内联同等参与去重，不留盲区。
  */
 export function replayDedup(
   cache: Map<string, DedupCacheEntry>,
@@ -74,15 +81,29 @@ export function replayDedup(
   if (DEDUP_IGNORE.has(toolName)) return null;
   const sig = toolSignature(toolName, args);
   const prev = cache.get(sig);
-  if (!prev || !prev.inline) return null;
+  if (!prev) return null;
   // 用入参 schema 的键集合校验"本次与上次参数语义一致"（忽略工具可能补的默认字段），
   // 避免把参数序/可选字段差异误判为重复。
   const keys = [...new Set(invokeArgsSchemaKeys)].sort().join(",");
-  const full = JSON.stringify(prev.result);
-  return {
-    replay:
-      `[去重回放] 本次 ${toolName}（签名 keys=${keys}）与上一次调用参数一致，` +
-      `其结果已在上文完整内联、未改变，完整结果如下：\n${full}\n` +
-      `请直接基于以上数据作答，不要再重复调用 ${toolName} 查询同一参数。`,
-  };
+  if (prev.inline) {
+    const full = JSON.stringify(prev.result);
+    return {
+      replay:
+        `[去重回放] 本次 ${toolName}（签名 keys=${keys}）与上一次调用参数一致，` +
+        `其结果已在上文完整内联、未改变，完整结果如下：\n${full}\n` +
+        `请直接基于以上数据作答，不要再重复调用 ${toolName} 查询同一参数。`,
+    };
+  }
+  if (prev.ref) {
+    return {
+      replay:
+        `[去重回放] 本次 ${toolName}（签名 keys=${keys}）与上一次调用参数一致，` +
+        `该查询已执行过、结果已外置且不会改变：ref=${prev.ref}（摘要：${String(
+          (prev.result as any)?.summary ?? ""
+        ).slice(0, 200)}）。\n` +
+        `**不要重新调用 ${toolName}**——需要完整数据时调用 getArtifact（ref="${prev.ref}"）取回，` +
+        `然后基于取回的数据作答；该 ref 可反复取回，取回本身不算重复查询。`,
+    };
+  }
+  return null;
 }
