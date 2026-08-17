@@ -55,6 +55,7 @@ import {
   choicesProtocol,
   toolFirstProtocol,
   structuredOutputGuide,
+  thinkingLanguageGuide,
 } from "./core/prompt/index.js";
 import { renderBlocksToText, validateBlocks } from "./core/render/index.js";
 import { z } from "zod";
@@ -495,6 +496,7 @@ const runtime = new CopilotRuntime({
             compactionProtocol(),
             toolFirstProtocol(),
             structuredOutputGuide(),
+            thinkingLanguageGuide(),
             choicesProtocol(),
             prevSummary
               ? `[上一阶段摘要（本线程延续上下文）]\n${prevSummary}`
