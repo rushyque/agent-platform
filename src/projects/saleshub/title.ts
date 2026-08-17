@@ -34,8 +34,10 @@ function isUsableTitle(title: string): boolean {
 }
 
 function truncateTitle(userMessage: string, assistantReply: string): string {
-  const source = (userMessage || assistantReply || "").replace(/\s+/g, " ").trim();
-  if (!source) return "新对话";
+  const raw = (userMessage || assistantReply || "").replace(/\s+/g, " ").trim();
+  const source = raw.replace(/^[\s"'""「」【】()（）.,，。:：;；!！?？·\-_]+/, "").replace(/[\s"'""「」【】()（）.,，。:：;；!！?？·\-_]+$/, "");
+  // 兜底护栏：即便输入很短/异常，也绝不生成"本/货"这类单字标题。
+  if (!source || source.length < MIN_TITLE_LEN) return "新对话";
   return source.length > MAX_TITLE_LEN ? source.substring(0, MAX_TITLE_LEN) + "…" : source;
 }
 
