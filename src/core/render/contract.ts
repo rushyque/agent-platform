@@ -50,6 +50,19 @@ export const tableBlockSchema = z.object({
     )
     .min(1),
   rows: z.array(z.record(z.any())).describe("每行一个对象，键对应 columns[].key"),
+  total: z
+    .number()
+    .optional()
+    .describe("该口径下的命中总数。rows 只是当前展示的部分（如分页首页）时必填，" +
+      "让前端展示\"共 T 条、当前 N-M 条\"，防止部分被当完整"),
+  truncated: z
+    .boolean()
+    .optional()
+    .describe("true = rows 仅为全量的部分采样（受单页/预算限制），非完整数据集"),
+  footer: z
+    .string()
+    .optional()
+    .describe("覆盖范围说明（如 Showing 1-50 of 344. Use offset=50 to continue.），前端原样展示"),
 });
 export type TableBlock = z.infer<typeof tableBlockSchema>;
 
