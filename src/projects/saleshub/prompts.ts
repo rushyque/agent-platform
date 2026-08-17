@@ -61,7 +61,7 @@ export function buildSalesPrompt(context: SaleshubContext): string {
       capabilities: [
         "查定单记录（`saleshub_list_order_records`）：按关键字/年份/业务员/数据来源过滤，或查单条详情（含收款计划）。",
         "查冲红 / 预付转收款对账报表（`saleshub_recon_report`）：销售员视角的冲红销售/费用发票与预付转收款。",
-        "查当前销售员自己的全部汇款/收款记录（`saleshub_list_remittances`，含待填写/已填写/被驳回/已审核各状态，可按下账日期过滤）：回答「某月/某客户有多少汇款到账、每笔多少」「我还有哪些待填写/被驳回的汇款」。",
+        "查汇款/收款的**统计汇总**（`saleshub_remittance_stats`：按状态/客户/月份分组，一次取全，回答「这个月多少汇款」「按状态/客户/月拆分」「总共多少笔」）；查汇款**明细**（`saleshub_list_remittances`：服务端按日期/状态/客户过滤 + 分页，返回 total 与 footer，回答「某客户每笔到账」「我还有哪些待填写/被驳回」）。统计类问题**优先 stats，不拉明细自己加总**。",
         "查拜访计划与收件人候选（`saleshub_list_visit_plans` / `saleshub_visit_plan_recipients`）：回答「有哪些到访计划」「给谁发拜访计划邮件」。",
         "写操作（`saleshub_send_visit_plan_email`，仅完全模式可用）：给某条拜访计划的收件人发送邮件（含 Word 附件）。",
         "打开/跳转到内置页面（`navigate_to`）：用户要求去某页时用，route 从白名单选。",
@@ -90,7 +90,7 @@ export function buildSalesPrompt(context: SaleshubContext): string {
     section(
       "工具约定",
       "查定单记录用 `saleshub_list_order_records`（列表，支持关键字/年份/业务员/数据来源过滤）与 `saleshub_order_record_detail`（单条详情 + 收款计划）；" +
-        "查冲红/预付用 `saleshub_recon_report`；查当前销售员全部汇款/收款记录（各状态）用 `saleshub_list_remittances`。\n" +
+        "查冲红/预付用 `saleshub_recon_report`；汇款统计用 `saleshub_remittance_stats`（先 stats 拿汇总），汇款明细用 `saleshub_list_remittances`（分页，items 只是当前页、total 才是口径全量）。\n" +
         "查拜访计划用 `saleshub_list_visit_plans`（返回 id 供后续引用），查邮件收件人候选用 `saleshub_visit_plan_recipients`（返回 id/姓名/邮箱）。\n" +
         "金额以接口返回为准，币种见各工具的 `currency` 字段；定单记录里的金额见 `totalAmount`。\n" +
         "注意 `saleshub_list_order_records` 单页最多 100 条，返回 `total` 但不支持一次全量返回；面对宽泛的汇总诉求先按「大结果集与全量查询纪律」收窄口径，不要翻页硬拉全量。"
@@ -124,6 +124,7 @@ export function buildSalesPrompt(context: SaleshubContext): string {
     toolProtocol({
       rules: [
         "定单记录用 `saleshub_list_order_records` 拉列表（支持过滤与分页，返回 total）或 `saleshub_order_record_detail` 查单条；需要收款计划时用详情。",
+        "**汇款查询选品纪律**：统计/汇总类问题（多少笔、按状态/客户/月拆分、趋势）一律先 `saleshub_remittance_stats`，一次取全分组；只有用户要看具体明细时才 `saleshub_list_remittances`。明细结果里 `items` 只是当前页，`total` 才是口径全量——**绝不把首页当全量汇报**；footer 说明覆盖范围，确需下一页用 offset 续取，但禁止连续翻页硬拉全量。",
         "**大结果集纪律**：`saleshub_list_order_records` 单页最多 100 条且不支持一次返回全量。当用户要\"按客户/按年/全部汇总\"、或你的一次分页 `count` 已到上限而 `total` 明显更多时，**绝不翻页硬拉全量累计**（否则会把上下文撑爆、陷入工具调用循环）。改为：先用一次分页拿 `total` 与采样，再用 `choices` 主动收窄口径（看统计/TopN/某客户/某时间段/某业务员），多用 `chart`/`cards` 可视化呈现，并在回复里**如实说明覆盖范围与已超出单页上限**。",
         "冲红/预付相关问题（有多少冲红单、预付转收款、某客户冲红）一律用 `saleshub_recon_report`，不要用其它工具拼凑。",
         "要发拜访计划邮件时：先用 `saleshub_list_visit_plans` 找到目标计划 id，再用 `saleshub_visit_plan_recipients` 找收件人 id，最后调用 `saleshub_send_visit_plan_email`。",

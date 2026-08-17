@@ -1,7 +1,7 @@
 // SalesHub business tools + a curated subset of generic coreTools.
 import type { ToolDefinition } from "../../../types/agent-config.js";
 import { coreTools } from "../../../core/tools/index.js";
-import { listRemittancesTool } from "./remittances.js";
+import { listRemittancesTool, remittanceStatsTool } from "./remittances.js";
 import { listOrderRecordsTool, orderRecordDetailTool } from "./orderRecords.js";
 import { reconReportTool } from "./recon.js";
 import { navigateToTool } from "./navigateTo.js";
@@ -15,6 +15,7 @@ export {
   listOrderRecordsTool,
   orderRecordDetailTool,
   listRemittancesTool,
+  remittanceStatsTool,
   reconReportTool,
   listVisitPlansTool,
   listVisitPlanRecipientsTool,
@@ -25,6 +26,7 @@ export const salesHubTools: ToolDefinition[] = [
   listOrderRecordsTool,
   orderRecordDetailTool,
   listRemittancesTool,
+  remittanceStatsTool,
   reconReportTool,
   listVisitPlansTool,
   listVisitPlanRecipientsTool,
