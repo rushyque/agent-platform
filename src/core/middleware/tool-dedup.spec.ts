@@ -41,6 +41,8 @@ describe("tool dedup", () => {
     expect(hit).not.toBeNull();
     expect(hit!.replay).toContain("去重回放");
     expect(hit!.replay).toContain('{"total":114}');
+    expect(hit!.inline).toBe(true);
+    expect(hit!.ref).toBeUndefined();
   });
 
   it("上次结果外置（带 ref）也命中：回放 ref+summary 并引导 getArtifact 取回，而非重查", () => {
@@ -55,6 +57,8 @@ describe("tool dedup", () => {
     expect(hit!.replay).toContain("art-abc");
     expect(hit!.replay).toContain("getArtifact");
     expect(hit!.replay).toContain("不要重新调用");
+    expect(hit!.inline).toBe(false);
+    expect(hit!.ref).toBe("art-abc");
   });
 
   it("上次结果外置但缺 ref（异常态）不命中，正常执行", () => {

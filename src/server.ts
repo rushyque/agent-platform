@@ -147,7 +147,9 @@ function toAISDKTools(
               });
               observeBus.emit("runs", "run.tool_result", {
                 runId, threadId, agentId, toolName: t.name,
-                execMs: 0, summary: "去重回放（同签名内联结果）", ref: null, inline: true,
+                execMs: 0,
+                summary: hit.inline ? "去重回放（同签名内联结果）" : "去重回放（外置 ref，引导 getArtifact 取回）",
+                ref: hit.ref ?? null, inline: hit.inline,
               });
               return hit.replay;
             }

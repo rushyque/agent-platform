@@ -72,12 +72,20 @@ export function createToolDedupCache(): Map<string, DedupCacheEntry> {
  *    不算新查询，引导模型 getArtifact 取回而非重跑后端。这是防"外置→看不到→重查"
  *    循环的关键：外置与内联同等参与去重，不留盲区。
  */
+export interface DedupReplayHit {
+  replay: string;
+  /** 本次回放的是内联全量结果（true）还是外置 ref（false） */
+  inline: boolean;
+  /** 外置回放时的 ref（inline=false 时有值） */
+  ref?: string;
+}
+
 export function replayDedup(
   cache: Map<string, DedupCacheEntry>,
   toolName: string,
   args: unknown,
   invokeArgsSchemaKeys: string[]
-): { replay: string } | null {
+): DedupReplayHit | null {
   if (DEDUP_IGNORE.has(toolName)) return null;
   const sig = toolSignature(toolName, args);
   const prev = cache.get(sig);
@@ -88,6 +96,7 @@ export function replayDedup(
   if (prev.inline) {
     const full = JSON.stringify(prev.result);
     return {
+      inline: true,
       replay:
         `[去重回放] 本次 ${toolName}（签名 keys=${keys}）与上一次调用参数一致，` +
         `其结果已在上文完整内联、未改变，完整结果如下：\n${full}\n` +
@@ -96,6 +105,8 @@ export function replayDedup(
   }
   if (prev.ref) {
     return {
+      inline: false,
+      ref: prev.ref,
       replay:
         `[去重回放] 本次 ${toolName}（签名 keys=${keys}）与上一次调用参数一致，` +
         `该查询已执行过、结果已外置且不会改变：ref=${prev.ref}（摘要：${String(
