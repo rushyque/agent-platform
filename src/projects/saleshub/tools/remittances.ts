@@ -34,6 +34,7 @@ interface StatsBucket {
   key: string;
   count: number;
   amount: number | null;
+  amountForeign?: number | null;
 }
 
 interface StatsResponse {
@@ -126,7 +127,7 @@ export const remittanceStatsTool: ToolDefinition = {
     "汇款/收款记录**聚合统计**（不含草稿）：按状态（status）/客户公司（customer）/月份（month）分组，返回每组笔数与金额，一次调用取全部分组，无需翻页。" +
     "支持日期范围（startDate/endDate，YYYY-MM-DD）与客户过滤；`scope` 会回显本次统计口径（日期范围 + groupBy），回答时必须带上口径，防止把部分当全量。\n" +
     "**优先用本工具回答**：「这个月有多少汇款」「总共多少笔」「按状态拆分」「本月各客户到账」「按月份趋势」等一切统计/汇总类问题。" +
-    "注意：amount 为人民币口径金额（CNY/RMB 合计），跨币种时在回答里说明这一点。需要明细时才改用 `saleshub_list_remittances`（分页）。",
+    "注意：`amount` 为人民币口径金额（仅 CNY/RMB 币种），`amountForeign` 为非人民币币种的原始金额合计（**未折算**，USD/HKD 等混币种直接相加仅作量级参考）。回答金额时优先引用明细的单币种金额；用 amountForeign 汇报时必须注明\"未折算的外币合计\"。需要明细时才改用 `saleshub_list_remittances`（分页）。",
   parameters: z.object({
     startDate: z.string().optional().describe("记录日期起（含），YYYY-MM-DD"),
     endDate: z.string().optional().describe("记录日期止（含），YYYY-MM-DD"),
@@ -150,7 +151,7 @@ export const remittanceStatsTool: ToolDefinition = {
       total: resp.total,
       bucketCount: (resp.buckets || []).length,
       buckets: resp.buckets || [],
-      note: "统计口径见 scope；金额为人民币口径（CNY/RMB）合计。需要明细时用 saleshub_list_remittances 分页查询。",
+      note: "统计口径见 scope；amount 为人民币口径（CNY/RMB），amountForeign 为未折算的外币合计（注明币种构成）。需要明细时用 saleshub_list_remittances 分页查询。",
     };
   },
 };
