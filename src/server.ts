@@ -546,8 +546,9 @@ const runtime = new CopilotRuntime({
               : {
                   render: tool({
                     description:
-                      "系统提示：本系统未装配 render 工具，不得把 render 当作工具调用。" +
-                      "所有表格/指标卡/图表/选项等结构化内容，都必须在回复正文里用 <render>{json}</render> 内联输出。",
+                      "兜底护栏（shim）：不是渲染通道，正常回答**永远不要调用本工具**。" +
+                      "结构化内容一律在回复正文内联 <render>{json}</render>（纯文本，前端解析）。" +
+                      "仅当误调用发生时，本工具才把你传入的 blocks 原样转成内联文本回给你。",
                     inputSchema: z.object({
                       blocks: z
                         .array(z.any())
@@ -569,7 +570,7 @@ const runtime = new CopilotRuntime({
                         inline = JSON.stringify(blocks ?? []);
                       }
                       return (
-                        `[内联引导] 本系统未装配 render 工具，请勿把 render 当作工具调用。` +
+                        `[内联引导] render 不是渲染通道，不要把它当工具调用。` +
                         `以下内容应作为你的回复正文直接输出（含首尾 <render> 标签原样保留，前端会解析）：\n\n` +
                         `${inline}\n\n` +
                         `请在你的回复文本里输出这一整段 <render>{json}</render>，不要再调用 render 或任何其它工具来呈现它。`
