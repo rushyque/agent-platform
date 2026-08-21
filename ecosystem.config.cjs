@@ -19,7 +19,8 @@ module.exports = {
       windowsHide: true, // 隐藏控制台窗口
       watch: false,
       autorestart: true, // 崩溃自动重启
-      max_memory_restart: "1G", // 超内存自动重启兜底
+      max_memory_restart: "1G",
+      node_args: "--max-old-space-size=768", // 超内存自动重启兜底
       kill_timeout: 10, // 停止超时（秒）
       merge_logs: true,
       time: true, // 日志行带时间戳
@@ -34,3 +35,4 @@ module.exports = {
     },
   ],
 };
+
